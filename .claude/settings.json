@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(docker compose *)",
+      "Bash(git diff *)",
+      "Bash(git status)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "mcp__postgres__query",
+      "mcp__github__get_pull_request",
+      "mcp__github__list_workflow_runs"
+    ],
+    "deny": ["Bash(git push --force*)", "Bash(rm -rf *)"]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/pre-commit-lint.sh" },
+          {
+            "type": "command",
+            "command": ".claude/hooks/run-affected-tests.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": ".claude/hooks/block-secrets.sh" },
+          {
+            "type": "command",
+            "command": ".claude/hooks/enforce-commit-message.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

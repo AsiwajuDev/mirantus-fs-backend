@@ -5,33 +5,70 @@ description: Module layout, dependency injection, request lifecycle, and bootstr
 
 # NestJS Architecture
 
-## Layering
+Follow NestJS recommended architectural patterns for module organization, dependency injection, request lifecycle handling, and application bootstrap.
 
-Follow a strict layered architecture:
+---
+
+# Layering
+
+Use the following architecture:
 
 ```text
 Controller → Service → Repository
 ```
 
-- **Controllers** should remain thin:
-  - Parse and validate requests using DTOs and Pipes.
-  - Call a single service method.
-  - Return the response.
+## Controllers
 
-- **Services** contain all business logic, including:
-  - Transition guards.
-  - Idempotency checks.
-  - Domain rules.
-  - Orchestration between repositories and external services.
+Controllers must remain thin.
 
-- **Repositories** (TypeORM) own persistence.
-  - Services should never construct raw SQL queries.
+Responsibilities:
+
+- Receive HTTP requests.
+- Parse input through DTOs and Pipes.
+- Delegate to one service method.
+- Return the result.
+
+Controllers must not contain:
+
+- Business rules.
+- State transition logic.
+- Idempotency logic.
+- Persistence logic.
 
 ---
 
-## Module Layout
+## Services
 
-Organize the project by **feature**, not by file type.
+Services contain all business logic.
+
+Examples:
+
+- Status transition validation.
+- Idempotency handling.
+- Domain rules.
+- Workflow orchestration.
+
+---
+
+## Repositories
+
+Repositories and TypeORM own persistence.
+
+Rules:
+
+- Services do not write raw SQL.
+- Services interact with persistence through repositories.
+- Database-specific operations remain in the data layer.
+
+---
+
+# Module Layout
+
+Organize code by feature.
+
+Each feature should contain everything required for that feature.
+
+Example:
 
 ```text
 src/
@@ -44,28 +81,44 @@ src/
     └── order-status.enum.ts
 ```
 
-Only genuinely cross-cutting concerns belong in `src/common/`, such as:
+---
 
-- Global exception filters
-- Global pipes
-- Shared decorators
-- Utility functions
+## Shared Code
 
-**Avoid** project-wide folders such as:
+Only genuinely cross-cutting concerns belong in:
 
 ```text
-src/controllers/
-src/services/
-src/dto/
+src/common/
 ```
 
-These work against NestJS's module system and make feature ownership unclear.
+Examples:
+
+- Global exception filters.
+- Global pipes.
+- Shared decorators.
+- Common infrastructure.
 
 ---
 
-## Dependency Injection
+## Avoid Global Type Folders
 
-Use **constructor injection exclusively**.
+Do not create:
+
+```text
+src/dto/
+src/controllers/
+src/services/
+```
+
+Feature ownership should remain clear through Nest modules.
+
+---
+
+# Dependency Injection
+
+Use constructor injection only.
+
+Example:
 
 ```ts
 @Injectable()
@@ -76,22 +129,31 @@ export class OrdersService {
 }
 ```
 
-### Provider Scope
+---
 
-Use the default **singleton scope** unless there is a compelling reason otherwise.
+## Provider Scope
 
-Avoid `REQUEST` scope because it:
+Use default singleton scope.
 
-- Creates new provider instances per request.
-- Increases memory usage.
+Avoid:
+
+```text
+REQUEST
+```
+
+scope unless there is a specific requirement.
+
+Reason:
+
+- Creates new providers per request.
+- Increases overhead.
 - Reduces throughput.
-- Is unnecessary for most applications.
 
 ---
 
-## Request Lifecycle
+# Request Lifecycle
 
-NestJS processes requests in the following order:
+NestJS request flow:
 
 ```text
 Request
@@ -108,84 +170,112 @@ Service
     ↓
 Interceptors (post)
     ↓
-Exception Filters (if an error is thrown)
+Exception Filters
     ↓
 Response
 ```
 
-### Guards
+---
+
+## Guards
 
 Run first.
 
-Use guards to reject requests before business logic executes, for example:
+Use guards for:
 
-- Authentication
-- Authorization
-- Structural preconditions
-- Partner validation
+- Authentication.
+- Authorization.
+- Structural preconditions.
 
----
+Examples:
 
-### Pipes
-
-Responsible for:
-
-- Validation
-- Transformation
-- DTO parsing
-
-This is where most **400 Bad Request** responses originate.
+- Validate partner identity.
+- Reject malformed request context.
 
 ---
 
-### Controllers
+## Pipes
 
-Controllers should only:
+Pipes validate and transform DTO input.
 
-- Accept validated input.
-- Delegate to the service.
-- Return the result.
+Responsibilities:
 
-Business rules do **not** belong here.
+- Validate request shape.
+- Convert types where configured.
+- Produce `400 Bad Request` responses.
 
----
-
-### Services
-
-Services implement:
-
-- Business logic
-- Domain rules
-- State transitions
-- Idempotency
-- Persistence orchestration
+Controllers should not perform manual field validation.
 
 ---
 
-### Interceptors (Post)
+## Response Interceptors
 
-Use response interceptors to:
+Post-processing interceptors validate and shape outgoing responses.
 
-- Shape responses.
+Responsibilities:
+
 - Remove internal fields.
-- Enforce a consistent response envelope.
-- Apply serialization.
+- Prevent accidental data leakage.
+- Enforce response envelopes.
+- Normalize API responses.
 
-Input validation alone is insufficient—response consistency matters as well.
-
----
-
-### Exception Filters
-
-Exception filters catch errors thrown anywhere in the pipeline and convert them into the application's standardized error response format.
+Input validation alone is insufficient.
 
 ---
 
-## Bootstrap (`main.ts`)
+## Exception Filters
 
-The following bootstrap configuration is considered mandatory:
+Exception filters catch errors from anywhere in the request lifecycle.
+
+Responsibilities:
+
+- Normalize error responses.
+- Apply shared error formatting.
+- Prevent inconsistent controller/service error payloads.
+
+See:
+
+```text
+error-handling
+```
+
+skill.
+
+---
+
+# Bootstrap (`main.ts`)
+
+Bootstrap ordering is intentional.
+
+Swagger setup must happen **before** `helmet()`.
+
+Reason:
+
+- Helmet's default Content Security Policy may block Swagger UI inline scripts/styles.
+- Fix Swagger-specific CSP issues with scoped exceptions.
+- Do not disable Helmet globally.
+
+---
+
+## Required Bootstrap Order
+
+Example:
 
 ```ts
+const config = new DocumentBuilder()
+  .setTitle('Mirantus Order Management Service')
+  .setDescription('Order lifecycle API for diagnostic test orders')
+  .setVersion('1.0')
+  .build();
+
+const document = SwaggerModule.createDocument(app, config);
+
+SwaggerModule.setup(
+  'api-docs',
+  app,
+  document,
+);
+
 app.use(helmet());
 
 app.enableCors({
@@ -200,26 +290,85 @@ app.useGlobalPipes(
   }),
 );
 
-app.useGlobalFilters(new HttpExceptionFilter());
+app.useGlobalFilters(
+  new HttpExceptionFilter(),
+);
 ```
-
-### Rate Limiting
-
-Use `@nestjs/throttler`.
-
-Configure it as a **global guard** so every new endpoint inherits protection automatically instead of decorating individual controllers.
 
 ---
 
-## Configuration
+# Rate Limiting
 
-Use `@nestjs/config` together with a validated configuration schema.
+Use:
 
-Supported validation approaches include:
+```text
+@nestjs/throttler
+```
+
+Requirements:
+
+- Protect mutating endpoints.
+- Apply as a global guard.
+
+Avoid controller-by-controller configuration.
+
+Global configuration ensures new endpoints inherit protection automatically.
+
+---
+
+# DTO Documentation and Validation
+
+DTOs must define both:
+
+- Validation rules.
+- API documentation metadata.
+
+Use:
+
+- `class-validator` for enforcement.
+- `@ApiProperty` for Swagger documentation.
+
+Example:
+
+```ts
+export class CreateOrderDto {
+  @ApiProperty({
+    example: 'b3f1c2e4-...',
+    description: 'Submitting partner UUID',
+  })
+  @IsUUID()
+  partnerId: string;
+
+  @ApiProperty({
+    enum: ['routine', 'urgent'],
+  })
+  @IsIn(['routine', 'urgent'])
+  priority: 'routine' | 'urgent';
+}
+```
+
+The DTO becomes the single source of truth.
+
+Avoid maintaining separate API documentation that can drift from actual validation behavior.
+
+---
+
+# Configuration
+
+Use:
+
+```text
+@nestjs/config
+```
+
+with validated configuration.
+
+Validation options:
 
 - Joi
 - class-validator
 
-Applications should **fail during startup** if required environment variables are missing or invalid rather than failing during request processing.
+Requirements:
 
-This ensures configuration issues are detected immediately and prevents partially configured deployments.
+- Validate required environment variables during startup.
+- Fail fast when configuration is missing or invalid.

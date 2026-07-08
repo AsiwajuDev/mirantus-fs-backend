@@ -62,6 +62,11 @@ create-order.dto.ts
 order-status.enum.ts
 ```
 
+**Exception:** TypeORM migrations under `database/migrations/` use the
+TypeORM CLI's own `{timestamp}-PascalCase.ts` convention (e.g.
+`1783512134007-CreateOrdersAndAuditTables.ts`) instead of kebab-case —
+this is the tool's naming contract, not a violation to flag.
+
 ---
 
 # TypeScript Compiler Configuration

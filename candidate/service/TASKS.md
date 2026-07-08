@@ -130,10 +130,44 @@ scope (per the working agreement in root `CLAUDE.md`).
       to reverse-engineer; `OrderStatusAudit`'s string columns use
       `text` (matching `logging-and-audit`'s schema table) instead of
       unbounded `varchar`.
-- [ ] First migration: create both tables, both indexes:
+- [x] First migration: create both tables, both indexes:
       `idx_orders_idempotency_key` unique on `(partner_id, idempotency_key)`
       — composite, not single-column, per SPEC.md §2 idempotency-key-scope
-      resolution — and `idx_orders_partner_status`
+      resolution — and `idx_orders_partner_status`.
+      `database/migrations/1783512134007-CreateOrdersAndAuditTables.ts`,
+      hand-written per `database-conventions` (raw SQL via
+      `QueryRunner.query`, not CLI-generated), creates both custom enum
+      types (`orders_priority_enum`/`orders_status_enum`, matching the
+      entity's `enumName`s), both tables, both indexes, and the
+      `order_status_audit.order_id → orders.id` FK with `ON DELETE
+      CASCADE` (an audit row only outlives its order in the sense of
+      recording history while the order exists; there's no order-delete
+      endpoint in SPEC.md at all, so this path is never actually
+      exercised — CASCADE was picked as the harmless default over
+      RESTRICT for that reason). **Verified against the live
+      `service-postgres-1` container** (can't use `npm run
+      migration:run` yet — `database/data-source.ts` and the npm
+      scripts are the next task) by running the migration's exact SQL
+      by hand via `psql`: schema matches (`\d orders`, `\d
+      order_status_audit`, `\di`); same-partner-same-key insert
+      correctly rejected with a unique-violation on
+      `idx_orders_idempotency_key`; different-partner-same-key insert
+      correctly succeeds as two independent rows — the actual
+      cross-tenant collision this constraint exists to prevent (SPEC.md
+      §2), confirmed structurally impossible, not just documented;
+      audit-row insert and `ON DELETE CASCADE` both behave correctly.
+      Ran the migration's `down()` SQL afterward to fully revert — DB
+      confirmed empty (`\dt`/`\dT`) — so the next task's real
+      `migration:run` starts clean instead of hitting "relation already
+      exists" from this manual test. Per `@code-reviewer`: the `CASCADE`
+      rationale is now also a comment in the migration file itself, not
+      only here. **Follow-up, not done now:** no index on
+      `order_status_audit.order_id` — not required by SPEC.md/
+      `database-conventions` today, but likely needed once any
+      investigation/reporting query pattern against the audit table
+      emerges (SPEC.md §8 calls it out for "internal state
+      reconstruction and investigation"). Add one in a later migration
+      if/when that need shows up, rather than now.
 - [ ] `database/data-source.ts` wired to env config
 - [ ] `@db-reviewer` run against the migrated local DB to confirm indexes
       exist as expected

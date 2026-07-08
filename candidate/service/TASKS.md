@@ -346,11 +346,69 @@ scope (per the working agreement in root `CLAUDE.md`).
       `@nestjs/typeorm`) — a `tsc` decorator-emit artifact, not application
       branch logic, and not something any additional test could reach.
       Full suite green: 6/6 suites, 23/23 tests.
-- [ ] Status-update service method wraps the order update and audit insert
+- [x] Status-update service method wraps the order update and audit insert
       in a single DB transaction (SPEC.md §2/§4); add a unit or integration
       test that forces a failure mid-update (e.g. a bad audit insert) and
       asserts the order's status change is rolled back too, not just
-      committed with a missing audit row
+      committed with a missing audit row.
+      **Layering interpretation:** the transaction itself
+      (`dataSource.transaction(...)`, `manager.getRepository(...).save`/
+      `.insert`) lives in `OrdersRepository.applyStatusTransition` (new),
+      not literally inside `orders.service.ts` — per `nestjs-architecture`
+      ("services do not write raw SQL... database-specific operations
+      remain in the data layer") and the `error-handling` skill's own
+      canonical example, where the service calls `this.repo.applyTransition
+      (order, next)` rather than opening the transaction itself.
+      `OrdersService.updateStatus(order, next, changedBy)` (new) only
+      calls `this.transitionGuard.assertValid(order.status, next)` then
+      delegates. Both take an already-loaded `Order` entity, not an `id`
+      — order lookup and `OrderNotFoundException` are Phase 5's job
+      (the endpoint), same reasoning as the previous task's exception-vs-
+      guard split. `updateStatus` also has no try/catch translating
+      unexpected repository failures into a logged `InternalServerErrorException`
+      (unlike `error-handling`'s fuller example) — deliberately deferred,
+      since structured logging + a request-scoped logger is explicitly
+      Phase 6's job, not this task's.
+      Unit tests: `test/unit/orders/orders.repository.spec.ts` (new
+      `applyStatusTransition` describe block, mocked `DataSource`/
+      `EntityManager`) — asserts `manager.getRepository(Order).save` and
+      `manager.getRepository(OrderStatusAudit).insert` are called with
+      the correct data inside one `dataSource.transaction()` call, and
+      that a rejection from the audit insert propagates rather than
+      being swallowed. `test/unit/orders/orders.service.spec.ts`
+      (rewritten from the generated stub) — valid transition delegates
+      with the guard called first; an invalid transition (guard throws)
+      never reaches the repository.
+      **Real rollback, not just mocked propagation:** mocks can't prove
+      atomicity — `dataSource.transaction()` on a mock manager doesn't
+      have real rollback semantics to verify. Added
+      `test/integration/orders-status-transition.e2e-spec.ts` against
+      the live `service-postgres-1` container (via `database/data-source.ts`'s
+      `dataSourceOptions`, no HTTP layer bootstrapped since none exists
+      yet — Phase 5's job): one test confirms both the order update and
+      audit row commit together; the other passes `changedBy: null`
+      (bypassing the type system deliberately, test-only) to force a
+      genuine Postgres `NOT NULL` violation on `order_status_audit
+      .changed_by` mid-transaction, then re-queries the DB directly and
+      confirms the order's status reverted to `received` and zero audit
+      rows exist — the literal "bad audit insert" scenario this task
+      names, verified against real Postgres, not a mock. `npm run
+      test:e2e` (Postgres running): 1 suite, 2 tests, green; DB confirmed
+      empty afterward (`afterEach` cleanup).
+      **Known, pre-existing coverage-tool artifact (documented previously
+      for `OrdersRepository`, now also seen on `OrdersService`):**
+      `npm run test -- --coverage` shows `orders.repository.ts` at 100%
+      stmt/func/line but 85.71% branch, and `orders.service.ts` at 100%
+      stmt/func/line but 75% branch. In both cases the only uncovered
+      branches are on each class's constructor parameter-property lines
+      — confirmed (via a standalone `tsc --experimentalDecorators
+      --emitDecoratorMetadata` repro of a bare `@Injectable()` class with
+      plain constructor parameter properties, *no* per-parameter
+      decorator needed) to be the compiled `__decorate`/parameter-property
+      assignment ternary, not application logic. This will recur on
+      every future NestJS provider with constructor-injected dependencies
+      in this codebase — not a gap introduced by this task, and not
+      something any additional test could close.
 
 ## Phase 5 — Endpoints
 

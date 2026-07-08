@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { QueryFailedError, Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, QueryFailedError, Repository } from 'typeorm';
 
+import { OrderStatusAudit } from './entities/order-status-audit.entity';
 import { Order } from './entities/order.entity';
+import type { OrderStatus } from './order-status.enum';
 
 // Name of the composite unique constraint from the Phase 3 migration —
 // (partnerId, idempotencyKey), scoped per partner per SPEC.md §2.
@@ -28,6 +30,7 @@ export interface IdempotentInsertResult {
 export class OrdersRepository {
   constructor(
     @InjectRepository(Order) private readonly repository: Repository<Order>,
+    @InjectDataSource() private readonly dataSource: DataSource,
   ) {}
 
   // Insert-first, per `database-conventions`: never SELECT-then-INSERT.
@@ -54,6 +57,33 @@ export class OrdersRepository {
       });
       return { order: existing, isNew: false };
     }
+  }
+
+  // logging-and-audit: order update + audit insert must be atomic — both
+  // committed together, or neither. `changedBy` is the caller's job to
+  // supply correctly (partnerId on creation, the literal "system" on the
+  // PATCH transition endpoint, per SPEC.md §4) — this method doesn't
+  // guess it.
+  async applyStatusTransition(
+    order: Order,
+    next: OrderStatus,
+    changedBy: string,
+  ): Promise<Order> {
+    return this.dataSource.transaction(async (manager) => {
+      const updated = await manager.getRepository(Order).save({
+        ...order,
+        status: next,
+      });
+
+      await manager.getRepository(OrderStatusAudit).insert({
+        orderId: order.id,
+        previousStatus: order.status,
+        newStatus: next,
+        changedBy,
+      });
+
+      return updated;
+    });
   }
 
   private isIdempotencyKeyViolation(err: unknown): boolean {

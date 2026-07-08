@@ -1,6 +1,7 @@
-import { QueryFailedError, type Repository } from 'typeorm';
+import { QueryFailedError, type DataSource, type Repository } from 'typeorm';
 
-import type { Order } from '../../../src/orders/entities/order.entity';
+import { Order } from '../../../src/orders/entities/order.entity';
+import { OrderStatusAudit } from '../../../src/orders/entities/order-status-audit.entity';
 import {
   type CreateOrderInput,
   OrdersRepository,
@@ -31,6 +32,9 @@ describe('OrdersRepository', () => {
   let create: jest.Mock;
   let insert: jest.Mock;
   let findOneByOrFail: jest.Mock;
+  let orderManagerSave: jest.Mock;
+  let auditManagerInsert: jest.Mock;
+  let transaction: jest.Mock;
   let repository: OrdersRepository;
 
   beforeEach(() => {
@@ -44,7 +48,30 @@ describe('OrdersRepository', () => {
       findOneByOrFail,
     } as unknown as Repository<Order>;
 
-    repository = new OrdersRepository(typeOrmRepository);
+    orderManagerSave = jest.fn((entity: Order) => Promise.resolve(entity));
+    auditManagerInsert = jest.fn().mockResolvedValue(undefined);
+
+    const manager = {
+      getRepository: jest.fn((entity: unknown) => {
+        if (entity === Order) {
+          return { save: orderManagerSave };
+        }
+        if (entity === OrderStatusAudit) {
+          return { insert: auditManagerInsert };
+        }
+        throw new Error(
+          `unexpected entity passed to getRepository: ${String(entity)}`,
+        );
+      }),
+    };
+
+    transaction = jest.fn((work: (manager: unknown) => Promise<unknown>) =>
+      work(manager),
+    );
+
+    const dataSource = { transaction } as unknown as DataSource;
+
+    repository = new OrdersRepository(typeOrmRepository, dataSource);
   });
 
   it('inserts a new order when the idempotency key is unused', async () => {
@@ -131,5 +158,43 @@ describe('OrdersRepository', () => {
 
     await expect(repository.insertIdempotent(input)).rejects.toBe(unexpected);
     expect(findOneByOrFail).not.toHaveBeenCalled();
+  });
+
+  describe('applyStatusTransition', () => {
+    const order = {
+      id: 'order-1',
+      partnerId: 'partner-a',
+      status: 'received',
+    } as Order;
+
+    it('updates the order and writes the audit row inside one transaction', async () => {
+      const result = await repository.applyStatusTransition(
+        order,
+        'accepted',
+        'partner-a',
+      );
+
+      expect(transaction).toHaveBeenCalledTimes(1);
+      expect(orderManagerSave).toHaveBeenCalledWith({
+        ...order,
+        status: 'accepted',
+      });
+      expect(auditManagerInsert).toHaveBeenCalledWith({
+        orderId: order.id,
+        previousStatus: order.status,
+        newStatus: 'accepted',
+        changedBy: 'partner-a',
+      });
+      expect(result).toEqual({ ...order, status: 'accepted' });
+    });
+
+    it('propagates a failure from the audit insert without swallowing it', async () => {
+      const auditFailure = new Error('audit insert failed');
+      auditManagerInsert.mockRejectedValueOnce(auditFailure);
+
+      await expect(
+        repository.applyStatusTransition(order, 'accepted', 'partner-a'),
+      ).rejects.toBe(auditFailure);
+    });
   });
 });

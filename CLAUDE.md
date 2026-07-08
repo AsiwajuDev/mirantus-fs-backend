@@ -281,5 +281,12 @@ Rule:
 ```text
 One task per commit
 ```
-````
 
+## Manual edits between turns
+Human may edit TASKS.md, SPEC.md, or source files directly, outside
+a Claude Code session. Before writing to any file you haven't re-read in
+this turn, re-view it first — don't rely on an earlier view from this
+session. If a file differs from what you last wrote, treat that as an
+intentional edit to respect, not a state to silently overwrite.
+
+````

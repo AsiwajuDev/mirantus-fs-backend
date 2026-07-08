@@ -60,6 +60,13 @@ describe('QueryOrdersDto', () => {
     expect(errors.some((e) => e.property === 'pageSize')).toBe(true);
   });
 
+  it('rejects a non-integer pageSize', async () => {
+    const dto = plainToInstance(QueryOrdersDto, { pageSize: '20.5' });
+
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === 'pageSize')).toBe(true);
+  });
+
   it('does not reject an over-large pageSize at the DTO level (clamped in the service instead)', async () => {
     const dto = plainToInstance(QueryOrdersDto, { pageSize: '500' });
 

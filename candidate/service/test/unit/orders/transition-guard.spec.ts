@@ -40,6 +40,29 @@ describe('TransitionGuard', () => {
       );
     });
 
+    // SPEC.md §3, called out explicitly: "no state has itself listed as
+    // a valid next state, so re-submitting the current status ... is a
+    // 409, not a no-op 200." Every status (including the three terminal
+    // ones) must reject its own self-transition — none of this was
+    // covered anywhere else in the suite (unit or integration).
+    const selfTransitionCases: OrderStatus[] = [
+      'received',
+      'accepted',
+      'in_progress',
+      'completed',
+      'rejected',
+      'cancelled',
+    ];
+
+    it.each(selfTransitionCases)(
+      'rejects the self-transition %s -> %s as a 409, not a no-op',
+      (status) => {
+        expect(() => guard.assertValid(status, status)).toThrow(
+          InvalidTransitionException,
+        );
+      },
+    );
+
     it('carries the from/to states and a matching message on the thrown exception', () => {
       expect.assertions(5);
 

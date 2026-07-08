@@ -10,6 +10,9 @@ function buildReqRes(headers: Record<string, string> = {}) {
   return { req, res, setHeader };
 }
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 describe('CorrelationMiddleware', () => {
   const middleware = new CorrelationMiddleware();
 
@@ -22,7 +25,11 @@ describe('CorrelationMiddleware', () => {
 
     middleware.use(req, res, next);
 
-    expect(capturedDuringNext).toBeDefined();
+    // A stronger assertion than toBeDefined(): also catches a regression
+    // where the generated id is a non-empty but non-UUID placeholder
+    // (e.g. an empty string would already fail toBeTruthy, but a fixed
+    // literal like "generated" would slip past a mere definedness check).
+    expect(capturedDuringNext).toMatch(UUID_PATTERN);
     expect(setHeader).toHaveBeenCalledWith(
       'x-correlation-id',
       capturedDuringNext,
@@ -53,6 +60,6 @@ describe('CorrelationMiddleware', () => {
 
     middleware.use(req, res, next);
 
-    expect(captured).toBeTruthy();
+    expect(captured).toMatch(UUID_PATTERN);
   });
 });

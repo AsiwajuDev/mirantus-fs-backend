@@ -130,6 +130,52 @@ describe('OrdersService', () => {
         { idempotencyKey: 'key-1', partnerId: dto.partnerId },
       );
     });
+
+    // bodyMatches() compares three fields with &&. The mismatch test above
+    // only ever differs on patientReference (the first operand), which
+    // would still warn even if requestedLocation/priority comparisons were
+    // silently dropped from the implementation — that regression would
+    // slip through with 100% line coverage but no behavioral coverage.
+    // These two isolate a mismatch on each of the other fields.
+    it('warns when only requestedLocation differs from the stored order', async () => {
+      const existing = {
+        ...dto,
+        id: 'order-1',
+        status: 'accepted',
+        requestedLocation: 'A Different Facility',
+      } as Order;
+      insertIdempotent.mockResolvedValue({ order: existing, isNew: false });
+      const loggerWarnSpy = jest
+        .spyOn(getLogger(service), 'warn')
+        .mockImplementation(() => undefined);
+
+      await service.createOrder(dto, 'key-1');
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        'Idempotency key replayed with different body',
+        { idempotencyKey: 'key-1', partnerId: dto.partnerId },
+      );
+    });
+
+    it('warns when only priority differs from the stored order', async () => {
+      const existing = {
+        ...dto,
+        id: 'order-1',
+        status: 'accepted',
+        priority: 'urgent',
+      } as Order;
+      insertIdempotent.mockResolvedValue({ order: existing, isNew: false });
+      const loggerWarnSpy = jest
+        .spyOn(getLogger(service), 'warn')
+        .mockImplementation(() => undefined);
+
+      await service.createOrder(dto, 'key-1');
+
+      expect(loggerWarnSpy).toHaveBeenCalledWith(
+        'Idempotency key replayed with different body',
+        { idempotencyKey: 'key-1', partnerId: dto.partnerId },
+      );
+    });
   });
 
   describe('findAll', () => {

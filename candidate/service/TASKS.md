@@ -737,23 +737,147 @@ pass, one commit.
 
 ## Phase 7 — Tests
 
-- [ ] `@test-writer` invoked for unit test gaps
-- [ ] Integration test: full `POST → GET → PATCH` flow against real
-      Postgres container
-- [ ] Integration test: idempotency replay, asserted via row count,
-      not just HTTP response
-- [ ] Integration test: cross-tenant idempotency key collision (same
+Done as one pass across all six boxes, same cadence as Phases 5/6: the
+`@test-writer` review ran in the background while the four integration
+tests below were written in parallel (disjoint scope — `test/unit/` vs
+`test/integration/` — so no coordination hazard), then everything was
+verified together.
+
+- [x] `@test-writer` invoked for unit test gaps. Run with deliberately
+      separate context (per root CLAUDE.md's stated reason: "avoid
+      shared blind spots"), scoped explicitly to `test/unit/` only —
+      told not to touch `src/` or `test/integration/`, and to report
+      rather than fix if it found an actual implementation bug. Found
+      **no implementation bugs** — every gap was a missing or weak
+      *test*, not incorrect behavior. Five real gaps found and closed:
+      1. **Self-transitions were untested anywhere in the suite**
+         (unit or integration) despite SPEC.md §3 calling this out by
+         name as an easy-to-miss rule ("re-submitting the current
+         status ... is a 409, not a no-op 200") — added `it.each`
+         cases in `transition-guard.spec.ts` for all six statuses.
+      2. **`requestedLocation` had zero dedicated validation tests**
+         anywhere, despite carrying the same constraints as
+         `patientReference` (which was tested) — added empty-string,
+         over-255-char, and missing-required-field tests to
+         `create-order.dto.spec.ts`.
+      3. **`OrdersService.bodyMatches`'s "different body" test only
+         ever varied `patientReference`** — the first operand of the
+         `&&` chain — so a bug dropping the `requestedLocation` or
+         `priority` comparison wouldn't have been caught despite the
+         line showing "covered." Added two more isolated variants in
+         `orders.service.spec.ts`.
+      4. **Weak `toBeDefined()`/`toBeTruthy()` assertions** in
+         `correlation.middleware.spec.ts` wouldn't catch a regression
+         hardcoding a non-UUID placeholder — strengthened to assert an
+         actual UUID shape via regex.
+      5. Minor symmetry gaps: a non-integer `pageSize` case (only
+         `page` had one) in `query-orders.dto.spec.ts`, and an
+         array-header-value case for `Idempotency-Key` (Express
+         represents repeated headers as `string[]`) in
+         `idempotency-key.decorator.spec.ts`.
+      `npm run test -- --coverage`: 16 suites, 117 tests (up from 101),
+      100% stmt/func/line maintained throughout.
+- [x] Integration test: full `POST → GET → PATCH` flow against real
+      Postgres container. New `test/integration/orders-lifecycle.e2e-spec.ts`
+      (kept separate from `orders.e2e-spec.ts`, which tests each
+      endpoint's contract in isolation — this file is specifically
+      about cross-call, whole-lifecycle behavior). One test creates an
+      order, `GET`s it back, `PATCH`es its status, then `GET`s it again
+      to confirm the transition actually *persisted* — not just that
+      the `PATCH` response claimed it did.
+- [x] Integration test: idempotency replay, asserted via row count, not
+      just HTTP response. **Already satisfied**, found while reviewing
+      existing coverage before writing new tests — `orders.e2e-spec.ts`'s
+      "replays the same order (same row) for a repeated Idempotency-Key"
+      test (added during Phase 5) already asserts `SELECT count(*)`
+      equals 1, not just that the two HTTP responses match. Not
+      duplicated; cross-referenced instead.
+- [x] Integration test: cross-tenant idempotency key collision (same
       `Idempotency-Key` value, two different `partnerId`s) creates two
-      separate orders, asserted via row count — confirms the composite
-      `(partnerId, idempotencyKey)` unique constraint actually prevents
-      the cross-tenant leak described in SPEC.md §2
-- [ ] Integration test: audit row written on every status change,
-      including both `cancelled` paths
-- [ ] Integration test:
-      `accepted → rejected` and `in_progress → rejected`
-      both correctly return `409`
-      (confirms the tightened `rejected` reachability from SPEC.md §3 is
-      enforced, not just documented)
+      separate orders, asserted via row count. New test in
+      `orders-lifecycle.e2e-spec.ts`: two partners share one
+      `Idempotency-Key`, both get `201`s with different order ids, and
+      `SELECT count(*) WHERE idempotency_key = $1` confirms 2 rows
+      exist — the exact scenario the composite `(partnerId,
+      idempotencyKey)` constraint exists to make structurally
+      impossible (SPEC.md §2), now verified end-to-end over real HTTP
+      against real Postgres, not just at the repository/migration level
+      (Phases 3–4's verification).
+- [x] Integration test: audit row written on every status change,
+      including both `cancelled` paths. New test walks both terminal
+      paths to `cancelled` (`accepted → cancelled` and
+      `in_progress → cancelled`) via real `PATCH` calls, then queries
+      `order_status_audit` directly and asserts the *exact* ordered
+      sequence of `(previous_status, new_status, changed_by)` rows for
+      each — including the creation-time row (`previous_status: null`,
+      `changed_by: partnerId`) and every subsequent transition
+      (`changed_by: 'system'`, per SPEC.md §4).
+- [x] Integration test: `accepted → rejected` and `in_progress →
+      rejected` both correctly return `409`. New test drives an order
+      to `accepted` and asserts `rejected` is a `409` with
+      `from`/`to` fields; drives a second order to `in_progress` and
+      asserts the same — confirming `rejected`'s SPEC.md §3-tightened
+      reachability (only from `received`) is enforced over real HTTP,
+      not just documented or unit-tested against the guard in
+      isolation.
+      **Correction: the paragraph originally here concluded the
+      occasional `test:e2e` flake was "transient host resource
+      contention... not a bug." `@code-reviewer` reproduced it
+      empirically and showed that conclusion was wrong** — running
+      `npm run test:e2e` as 5 separate concurrent OS processes against
+      the one shared `service-postgres-1` container failed **3 of 5**,
+      then **3 of 3** on a second attempt: fully deterministic, not
+      rare. Root cause: every e2e file's `afterEach` ran an unscoped
+      `DELETE FROM orders` / `DELETE FROM order_status_audit` against
+      the live database — safe for one process at a time (which is all
+      Phase 6's `maxWorkers: 1` fix actually guaranteed: one process's
+      test *files* run sequentially, not that a *second, independent*
+      `npm run test:e2e` invocation can't run at the same time), but a
+      second concurrent process's cleanup deletes rows the first
+      process is still mid-test with, producing exactly the mix of
+      `500`s and FK-constraint violations reported.
+      Fixed properly, not just re-documented: new
+      `test/integration/support/partner-id-tracker.ts` — every test
+      that creates an order now routes its `partnerId` through a
+      tracker, and `afterEach` deletes only rows matching *this test
+      run's own* tracked partner ids (`WHERE partner_id = ANY($1::uuid[])`),
+      never the whole table. Applied consistently across all four
+      files that write orders/audit rows (`orders.e2e-spec.ts`,
+      `orders-lifecycle.e2e-spec.ts`, `orders-status-transition.e2e-spec.ts`,
+      `throttle.e2e-spec.ts`). Also fixed the same review pass surfaced:
+      `orders-status-transition.e2e-spec.ts` (Phase 4) had every test
+      insert with the exact same hardcoded `partnerId` literal instead
+      of a fresh random one like every other file — switched to
+      `randomUUID()`, both for consistency and because the tracker
+      needs a real per-test id to scope against.
+      **Re-verified the fix actually holds, not just the original
+      claim:** before the fix, 5-concurrent-process runs failed 3/5 and
+      3/3 (2 independent attempts, both deterministic). After the fix,
+      30 total concurrent-process runs (six batches of 5) had 28 clean,
+      2 failures — both a *different* class of error entirely (`421
+      Misdirected Request` once, `401 Unauthorized` once), neither a
+      status code this application ever legitimately returns anywhere
+      (there is no authentication in this service at all, per SPEC.md
+      §8), and neither related to the database. Consistent with raw
+      HTTP/connection-layer crosstalk from binding ~30–36 simultaneous
+      ephemeral Nest HTTP servers at once — self-inflicted by the stress
+      test's own extremity (no real CI pipeline runs five full
+      `test:e2e` invocations concurrently), not a defect in the
+      suite or app. Confirmatory: immediately after that stress
+      campaign, one single, non-concurrent run also transiently failed
+      with a raw `Parse Error: Expected HTTP/, RTSP/ or ICE/`
+      (OS-level socket/port pressure from dozens of rapid-fire process
+      spawns in a short window) — a 5-second pause was enough for three
+      subsequent clean single/sequential runs, confirming this
+      residual is about the test *methodology's* own extremity, not
+      the code.
+      **Full verification, both suites:** `npm run test -- --coverage`:
+      16 suites, 117 tests, green, every run. `npm run test:e2e`: 6
+      suites, 33 tests, clean on every realistic (single-invocation)
+      run; the concurrent-process race that was the real, root-caused
+      bug is fixed and re-verified as described above.
+      `npm run lint`: clean (same pre-existing, unrelated `main.ts`
+      warning).
 
 ## Phase 8 — CI & infra
 

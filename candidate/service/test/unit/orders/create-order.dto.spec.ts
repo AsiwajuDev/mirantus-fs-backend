@@ -58,4 +58,49 @@ describe('CreateOrderDto', () => {
     const errors = await validate(dto);
     expect(errors.some((e) => e.property === 'priority')).toBe(true);
   });
+
+  // requestedLocation carries the same @IsString/@IsNotEmpty/@MaxLength(255)
+  // constraints as patientReference (SPEC.md §2), but had no dedicated
+  // coverage anywhere in the suite prior to this — only ever present as
+  // valid fixture data.
+  it('rejects an empty requestedLocation', async () => {
+    const dto = plainToInstance(CreateOrderDto, {
+      ...validDto(),
+      requestedLocation: '',
+    });
+
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === 'requestedLocation')).toBe(true);
+  });
+
+  it('rejects a requestedLocation over 255 characters', async () => {
+    const dto = plainToInstance(CreateOrderDto, {
+      ...validDto(),
+      requestedLocation: 'x'.repeat(256),
+    });
+
+    const errors = await validate(dto);
+    expect(errors.some((e) => e.property === 'requestedLocation')).toBe(true);
+  });
+
+  describe('missing required fields', () => {
+    const requiredFields = [
+      'partnerId',
+      'patientReference',
+      'requestedLocation',
+      'priority',
+    ] as const;
+
+    it.each(requiredFields)(
+      'rejects a body missing %s entirely',
+      async (field) => {
+        const body = validDto();
+        delete body[field];
+        const dto = plainToInstance(CreateOrderDto, body);
+
+        const errors = await validate(dto);
+        expect(errors.some((e) => e.property === field)).toBe(true);
+      },
+    );
+  });
 });

@@ -6,6 +6,7 @@ import { dataSourceOptions } from '../../database/data-source';
 import { OrderStatusAudit } from '../../src/orders/entities/order-status-audit.entity';
 import { Order } from '../../src/orders/entities/order.entity';
 import { OrdersRepository } from '../../src/orders/orders.repository';
+import { createPartnerIdTracker } from './support/partner-id-tracker';
 
 // Real Postgres container required (see candidate/service/CLAUDE.md).
 // This proves the transactional atomicity itself — a property that only
@@ -15,6 +16,7 @@ import { OrdersRepository } from '../../src/orders/orders.repository';
 describe('OrdersRepository.applyStatusTransition (real Postgres)', () => {
   let dataSource: DataSource;
   let repository: OrdersRepository;
+  const partnerIdTracker = createPartnerIdTracker();
 
   beforeAll(async () => {
     dataSource = new DataSource(dataSourceOptions);
@@ -30,15 +32,14 @@ describe('OrdersRepository.applyStatusTransition (real Postgres)', () => {
   });
 
   afterEach(async () => {
-    await dataSource.query('DELETE FROM order_status_audit');
-    await dataSource.query('DELETE FROM orders');
+    await partnerIdTracker.cleanup(dataSource);
   });
 
   async function insertOrder(): Promise<Order> {
     const orderRepo = dataSource.getRepository(Order);
     return orderRepo.save(
       orderRepo.create({
-        partnerId: 'b3f1c2e4-0000-0000-0000-000000000001',
+        partnerId: partnerIdTracker.track(randomUUID()),
         patientReference: 'PT-2026-00417',
         requestedLocation: 'Lagos Diagnostics, Ikeja',
         priority: 'routine',

@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 
 import { AppModule } from '../../src/app.module';
 import { configureApp } from '../../src/configure-app';
+import { createPartnerIdTracker } from './support/partner-id-tracker';
 
 // Deliberately its own file/app instance (its own in-memory throttler
 // storage) so its request volume can't push any other suite's mutating
@@ -34,14 +35,15 @@ describe('Rate limiting (real Postgres)', () => {
     await app.close();
   });
 
+  const partnerIdTracker = createPartnerIdTracker();
+
   afterEach(async () => {
-    await dataSource.query('DELETE FROM order_status_audit');
-    await dataSource.query('DELETE FROM orders');
+    await partnerIdTracker.cleanup(dataSource);
   });
 
   function createOrderPayload() {
     return {
-      partnerId: randomUUID(),
+      partnerId: partnerIdTracker.track(randomUUID()),
       patientReference: 'PT-2026-00417',
       requestedLocation: 'Lagos Diagnostics, Ikeja',
       priority: 'routine',

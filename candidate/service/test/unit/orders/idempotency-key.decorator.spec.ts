@@ -30,4 +30,15 @@ describe('idempotencyKeyFactory', () => {
       idempotencyKeyFactory(undefined, contextWithHeader('not-a-uuid')),
     ).toThrow(BadRequestException);
   });
+
+  it('throws BadRequestException when the header is repeated (array value)', () => {
+    // Express represents a repeated header as string[], not a string —
+    // `typeof value !== 'string'` must reject this, not attempt to
+    // silently pick the first/last entry.
+    const uuid = 'c4a2d1e5-0000-4000-8000-000000000099';
+
+    expect(() =>
+      idempotencyKeyFactory(undefined, contextWithHeader([uuid, uuid])),
+    ).toThrow(BadRequestException);
+  });
 });

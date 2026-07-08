@@ -7,6 +7,7 @@ import { DataSource } from 'typeorm';
 
 import { AppModule } from '../../src/app.module';
 import { configureApp } from '../../src/configure-app';
+import { createPartnerIdTracker } from './support/partner-id-tracker';
 
 interface OrderBody {
   id: string;
@@ -31,9 +32,11 @@ interface ErrorBody {
   to?: string;
 }
 
+const partnerIdTracker = createPartnerIdTracker();
+
 function createOrderPayload() {
   return {
-    partnerId: randomUUID(),
+    partnerId: partnerIdTracker.track(randomUUID()),
     patientReference: 'PT-2026-00417',
     requestedLocation: 'Lagos Diagnostics, Ikeja',
     priority: 'routine',
@@ -72,8 +75,7 @@ describe('Orders endpoints (real Postgres)', () => {
   });
 
   afterEach(async () => {
-    await dataSource.query('DELETE FROM order_status_audit');
-    await dataSource.query('DELETE FROM orders');
+    await partnerIdTracker.cleanup(dataSource);
   });
 
   async function createOrder(

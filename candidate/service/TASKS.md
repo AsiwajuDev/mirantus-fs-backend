@@ -9,7 +9,7 @@ scope (per the working agreement in root `CLAUDE.md`).
 
 - [x] `.claude/` configured — CLAUDE.md, skills, subagents, hooks, MCP
       (see AI_USAGE.md for the reasoning behind each)
-- [ ] `chmod +x .claude/hooks/*.sh` — Claude Code runs this itself on
+- [x] `chmod +x .claude/hooks/*.sh` — Claude Code runs this itself on
       first session, once, with one approval prompt
 - [ ] `docker compose up -d` for Postgres — Claude Code runs this as
       part of Phase 2 scaffolding, not a separate manual step
@@ -25,7 +25,7 @@ scope (per the working agreement in root `CLAUDE.md`).
 
 ## Phase 2 — Scaffold
 
-- [ ] `nest new` into `candidate/service/`
+- [x] `nest new` into `candidate/service/`
 - [ ] Install core deps:
       `@nestjs/typeorm`, `typeorm`, `pg`,
       `@nestjs/config`, `class-validator`, `class-transformer`,

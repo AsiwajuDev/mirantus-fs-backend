@@ -1,2 +1,2 @@
 #!/usr/bin/env sh
-npx --prefix candidate/service commitlint --edit "$1"
+npx --prefix candidate/service commitlint --cwd candidate/service --edit "$1"

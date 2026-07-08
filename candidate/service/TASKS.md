@@ -57,7 +57,10 @@ scope (per the working agreement in root `CLAUDE.md`).
       `src` back. `test/jest-e2e.json` (the separate `test:e2e` config)
       is untouched and unaffected. Same relocation will be needed for
       every future `nest g` module.
-- [ ] Generate the `health` module skeleton the same way
+- [x] Generate the `health` module skeleton the same way — same
+      spec-relocation to `test/unit/health/` applied (no further jest
+      config changes needed; `roots`/`rootDir` from the orders task
+      already cover `test/unit/health/` too)
 - [ ] Confirm `.gitignore` excludes `.env`, `node_modules`, `dist`
 - [ ] `docker-compose.yml` — Postgres service, correct port, named volume
 - [ ] `.env.example` committed; real `.env` not committed;

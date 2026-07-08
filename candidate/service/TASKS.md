@@ -40,10 +40,23 @@ scope (per the working agreement in root `CLAUDE.md`).
       Unit tests are intentionally at zero (`npm run test` → "No tests
       found") until the next task generates fresh `orders`/`health`
       spec files.
-- [ ] Generate the `orders` module skeleton:
+- [x] Generate the `orders` module skeleton:
       `nest g module orders && nest g controller orders && nest g service orders`
       — per `nestjs-architecture` skill, everything for this feature
-      lives inside `src/orders/`, not scattered at the top of `src/`
+      lives inside `src/orders/`, not scattered at the top of `src/`.
+      **Scope note (pre-cleared with the user before proceeding, not a
+      unilateral decision):** the generator co-locates `*.spec.ts` next
+      to the source by default; relocated both to `test/unit/orders/`
+      and reconfigured `package.json`'s jest block (`rootDir` `.`,
+      `roots: ["<rootDir>/test/unit"]`, `collectCoverageFrom:
+      ["src/**/*.(t|j)s"]`, `coverageDirectory: "coverage"`) to match,
+      per `CLAUDE.md`'s "Tests: `test/unit/` mirrors `src/`" convention
+      and the `testing-standards` skill. `roots` intentionally excludes
+      `src/` itself — specs reach source via relative imports, not Jest's
+      haste resolution, so this isn't an oversight to "fix" by adding
+      `src` back. `test/jest-e2e.json` (the separate `test:e2e` config)
+      is untouched and unaffected. Same relocation will be needed for
+      every future `nest g` module.
 - [ ] Generate the `health` module skeleton the same way
 - [ ] Confirm `.gitignore` excludes `.env`, `node_modules`, `dist`
 - [ ] `docker-compose.yml` — Postgres service, correct port, named volume

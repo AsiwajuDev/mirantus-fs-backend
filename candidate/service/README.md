@@ -1,98 +1,135 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Screening Order Service
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+A NestJS + TypeORM + PostgreSQL service implementing the order lifecycle
+described in [`SPEC.md`](./SPEC.md). Built for the Mirantus take-home
+case study; see the repo root [`README.md`](../../README.md) for the
+overall exercise and [`../../CASE_STUDY.md`](../../CASE_STUDY.md) for
+the original brief.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Prerequisites
 
-## Description
+- Node.js 24 (matches CI and `@types/node`'s `^24`)
+- Docker (for local Postgres via `docker compose`)
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## Quick start
 
 ```bash
-$ npm install
+cd candidate/service
+
+# 1. Start Postgres
+docker compose up -d
+
+# 2. Configure environment
+cp .env.example .env
+# .env.example already matches docker-compose.yml's credentials —
+# no edits needed for local dev.
+
+# 3. Install dependencies
+npm install
+
+# 4. Apply database migrations
+npm run migration:run
+
+# 5. Start the API
+npm run start:dev
 ```
 
-## Compile and run the project
+The API listens on `http://localhost:3000`. Confirm it's up:
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+curl http://localhost:3000/health   # {"status":"ok"} — no DB dependency
+curl http://localhost:3000/ready    # {"status":"ok"} — runs SELECT 1 against Postgres
 ```
 
-## Run tests
+Interactive API docs (Swagger UI, generated from the same DTOs that
+enforce validation): `http://localhost:3000/api-docs`.
+
+## Environment variables
+
+| Variable | Required | Default (`.env.example`) | Notes |
+|---|---|---|---|
+| `DATABASE_URL` | yes | `postgresql://postgres:postgres@localhost:5432/orders` | Matches `docker-compose.yml` |
+| `FRONTEND_ORIGIN` | yes | `http://localhost:5173` | CORS-allowed origin; must match wherever `provided/frontend/` runs |
+| `DB_POOL_SIZE` | no | `10` | Small default is intentional at this scale — see `.claude/skills/database-conventions` before changing |
+| `PORT` | no | `3000` | |
+
+Startup fails fast (before the app finishes bootstrapping) if a required
+variable is missing or malformed — see `src/common/config/env.validation.ts`.
+
+## Running tests
 
 ```bash
-# unit tests
-$ npm run test
+npm run test              # unit tests (mocked, no DB required)
+npm run test -- --coverage
 
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm run test:e2e          # integration tests — requires Postgres running
+                           # (docker compose up -d) and migrations applied
 ```
 
-## Deployment
+Both suites run in CI on every push/PR to `main`
+(`.github/workflows/ci.yml`), against a throwaway Postgres service
+container.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Using the provided frontend harness
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+cd provided/frontend
+cp .env.example .env      # VITE_API_BASE_URL=http://localhost:3000
+npm install
+npm run dev               # http://localhost:5173
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+With the backend running and `FRONTEND_ORIGIN=http://localhost:5173` set
+(the `.env.example` default), the harness can create orders, replay an
+`Idempotency-Key`, and drive status transitions end-to-end. See
+`SPEC.md` §9 for the one known harness limitation (the `cancelled`
+status, added beyond the original five-state brief, may not be
+selectable in the harness UI — verify it via `curl` or `/api-docs`
+instead).
 
-## Resources
+## Project structure
 
-Check out a few resources that may come in handy when working with NestJS:
+```
+src/
+├── orders/            # the one feature module: controller, service,
+│                       # repository, DTOs, entities, transition guard
+├── health/             # GET /health, GET /ready
+└── common/             # cross-cutting only: exception filter, response
+                        # interceptor, correlation-id middleware,
+                        # structured logger, env validation
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+database/
+├── data-source.ts      # TypeORM CLI config (standalone, outside Nest DI)
+└── migrations/         # hand-written migrations, never in src/
 
-## Support
+test/
+├── unit/               # mirrors src/, mocked dependencies
+└── integration/        # *.e2e-spec.ts, real Postgres via supertest
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+infra/terraform/         # plan-only AWS module (ECS Fargate + RDS) — see
+                        # TASKS.md Phase 8 for why this is plan-only
+```
 
-## Stay in touch
+## Database migrations
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+```bash
+npm run migration:run
+npm run migration:revert
+npm run migration:generate -- database/migrations/<Name>
+```
 
-## License
+Migrations are hand-written (not CLI-generated) per
+`.claude/skills/database-conventions` and live only in
+`database/migrations/`. Never edit an already-applied migration on a
+shared branch — add a new one instead.
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+## Design notes, deviations, and self-review
+
+The full design rationale, the one deliberate deviation from the
+original brief (a sixth `cancelled` status), and self-review notes
+(including manual end-to-end harness verification) live in
+[`SPEC.md`](./SPEC.md), particularly §3, §9, and §12.
+[`TASKS.md`](./TASKS.md) tracks what's been built, phase by phase, with
+notes on every non-obvious decision and every subagent-review finding
+along the way. [`AI_USAGE.md`](./AI_USAGE.md) documents how AI tooling
+was used to build this.

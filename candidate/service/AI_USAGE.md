@@ -37,7 +37,7 @@ I'd add given a real deploy target (SPEC.md Section 6).
 ## Judgment calls on tooling scope
 
 Considered and rejected a Postman MCP connector: request/response
-verification is already fully covered by the Vitest integration suite
+verification is already fully covered by the Jest integration suite
 against real Postgres in CI, and a second Postman-based collection would
 assert the same behavior in a format that can silently drift out of sync
 with the actual tests. Added `@nestjs/swagger` instead, a plain NestJS
@@ -75,11 +75,13 @@ telling the agent not to expand scope beyond what's written in
 rather than assumed. Added it as an explicit line item instead of
 relying on the agent to infer it.
 
-**Attribution trailer.** Noticed Claude Code appends a `Co-Authored-By:
-Claude` trailer to commits by default. Decided to disable it via the
-`attribution` setting in the shared `.claude/settings.json`, a
-deliberate, visible team policy rather than a personal preference hidden
-in a gitignored file.
+**Attribution trailer.** Considered disabling Claude Code's default
+`Co-Authored-By: Claude` commit trailer via `.claude/settings.json`, so
+authorship stays visible as a shared team policy rather than a personal
+preference hidden in a gitignored file. Decided against it: every commit
+in this repo keeps the trailer as-is, since it's accurate (each commit
+genuinely was AI-assisted) and removing it would obscure that from
+anyone reading the log later.
 
 ## What I'd change for a longer-lived team version of this
 

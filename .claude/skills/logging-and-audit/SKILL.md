@@ -1,4 +1,3 @@
-````md id="x7k4nb"
 ---
 name: logging-and-audit
 description: Structured logging conventions and the audit trail requirement for state-changing operations. Use for any code that logs, or that changes order state.
@@ -203,12 +202,19 @@ await this.dataSource.transaction(async manager => {
       orderId: order.id,
       previousStatus: order.status,
       newStatus: next,
-      changedBy: partnerId,
+      changedBy: actor,
     });
 
   return updated;
 });
 ```
+
+`actor` is not always the same value — per SPEC.md: on order
+creation it's the `partnerId` from the request body; on
+`PATCH /orders/:id/status` it's the literal string `"system"`, since
+that request carries no partner identity and authentication is out of
+scope (§8). Don't default this to `partnerId` unconditionally — the
+transition endpoint has no partner identity to put there.
 
 ---
 

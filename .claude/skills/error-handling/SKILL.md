@@ -20,7 +20,11 @@ Example:
 ```ts
 export class InvalidTransitionException extends ConflictException {
   constructor(from: OrderStatus, to: OrderStatus) {
-    super(`Cannot transition from ${from} to ${to}`);
+    super({
+      message: `Cannot transition from ${from} to ${to}`,
+      from,
+      to,
+    });
   }
 }
 
@@ -30,6 +34,14 @@ export class OrderNotFoundException extends NotFoundException {
   }
 }
 ```
+
+`InvalidTransitionException` carries `from`/`to` as structured fields in
+the object passed to `super()`, not only embedded in the message string
+— the global exception filter reads them via `exception.getResponse()`
+(the same mechanism it uses for every `HttpException`, with no special
+casing per exception type) and merges them into the response body
+(SPEC.md 5), since a client needs to branch on the states
+programmatically, not parse them out of prose.
 
 Benefits:
 
@@ -128,7 +140,7 @@ The filter is responsible for:
 
 ## Standard Error Response Shape
 
-Every error should follow this structure:
+Every error should follow this base structure:
 
 ```json
 {
@@ -136,9 +148,19 @@ Every error should follow this structure:
   "error": "InvalidTransitionException",
   "message": "Cannot transition from completed to accepted",
   "path": "/orders/123/status",
-  "timestamp": "2026-07-07T10:00:00.000Z"
+  "timestamp": "2026-07-07T10:00:00.000Z",
+  "correlationId": "b6e2b5b0-...-uuid"
 }
 ```
+
+`message` is always a single string — the filter's `exceptionFactory`
+flattens `class-validator`'s per-field array into one string, so the
+shape never varies by how many validation rules failed.
+
+Exceptions that carry extra structured data (e.g.
+`InvalidTransitionException`'s `from`/`to`, see above) get those fields
+merged into the body alongside the base shape, not instead of it. See
+SPEC.md §5 for the full example.
 
 ---
 

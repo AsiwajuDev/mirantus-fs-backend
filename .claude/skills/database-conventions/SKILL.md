@@ -89,12 +89,18 @@ The following indexes are required for this schema.
 
 ```sql
 CREATE UNIQUE INDEX idx_orders_idempotency_key
-ON orders (idempotency_key);
+ON orders (partner_id, idempotency_key);
 ```
+
+Composite, not single-column: the constraint is scoped per partner so
+that two different partners submitting the same key value cannot
+collide and receive each other's order back (see SPEC.md 2). A
+single-column unique index would make that cross-tenant collision
+possible instead of structurally impossible.
 
 Purpose:
 
-- Enforces idempotency.
+- Enforces idempotency, scoped per partner.
 - Prevents duplicate order creation.
 - Provides concurrency safety.
 
@@ -145,7 +151,8 @@ try {
   return await this.repo.insert(newOrder);
 } catch (err) {
   if (isUniqueViolation(err, 'idx_orders_idempotency_key')) {
-    return await this.repo.findByIdempotencyKey(
+    return await this.repo.findByPartnerAndIdempotencyKey(
+      newOrder.partnerId,
       newOrder.idempotencyKey,
     );
   }

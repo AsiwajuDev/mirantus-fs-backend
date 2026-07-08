@@ -1,4 +1,3 @@
-````md id="h5p9zr"
 ---
 name: git-and-commits
 description: Commit message format and review checklist. Use before any git commit.

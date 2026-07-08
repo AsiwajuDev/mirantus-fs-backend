@@ -20,11 +20,11 @@ used in the workflow, and §9 for a known limitation around it.
 |---|---|---|
 | `id` | uuid, pk | generated |
 | `partnerId` | uuid | required, identifies the submitting partner |
-| `patientReference` | string | pseudonymous identifier only, never a real name/MRN |
-| `requestedLocation` | string | required, free text (e.g. facility name) |
+| `patientReference` | string | pseudonymous identifier only, never a real name/MRN; max 255 chars |
+| `requestedLocation` | string | required, free text (e.g. facility name); max 255 chars |
 | `priority` | enum: `routine` \| `urgent` | required |
 | `status` | enum: `received` \| `accepted` \| `in_progress` \| `completed` \| `rejected` \| `cancelled` | defaults to `received` on creation |
-| `idempotencyKey` | uuid | required on creation, unique constraint |
+| `idempotencyKey` | uuid | required on creation; unique **per partner** — the constraint is composite on `(partnerId, idempotencyKey)`, not global (see below) |
 | `createdAt` | timestamptz | set on insert |
 | `updatedAt` | timestamptz | set on every update |
 
@@ -42,6 +42,18 @@ used in the workflow, and §9 for a known limitation around it.
 One row per state change, written in the same DB transaction as the
 change itself, see `logging-and-audit` skill for why "same transaction"
 is non-negotiable, not just a nice-to-have.
+
+### Idempotency key scope
+
+The unique constraint on `idempotencyKey` is scoped **per partner**
+(`UNIQUE (partner_id, idempotency_key)`), not global. This was flagged
+during spec review: a global constraint would mean two unrelated
+partners who happen to submit the same UUID as their idempotency key
+would collide, and the second partner's request would silently receive
+the first partner's order back — a cross-tenant data disclosure. Scoping
+the constraint per partner (the same approach used by Stripe and similar
+idempotency-key APIs) makes that collision structurally impossible
+rather than merely unlikely.
 
 ## 3. Status lifecycle
 
@@ -84,6 +96,13 @@ Any transition not listed in this table returns `409 Conflict`. The
 transition table is defined once as shared data and imported by both the
 `TransitionGuard` and its unit tests rather than duplicated.
 
+This includes **self-transitions** (e.g. `accepted → accepted`): no
+state has itself listed as a valid next state, so re-submitting the
+current status via `PATCH /orders/:id/status` is a `409`, not a no-op
+`200`. This is a status *transition* endpoint, not an idempotent replay
+mechanism — idempotency is handled separately, at creation, via
+`Idempotency-Key` (§4).
+
 ## 4. Endpoints
 
 ### `POST /orders`
@@ -103,18 +122,50 @@ transition table is defined once as shared data and imported by both the
 
 **Behavior:**
 
-- New `Idempotency-Key` → insert with `status: received`, write the audit
-  row (`previousStatus: null`), return `201` with the full order.
-- Same `Idempotency-Key` replayed → return the **original** order as
-  `201` (not a new row, not a `409`), matched by the unique DB
+- New `Idempotency-Key` (for that `partnerId`) → insert with
+  `status: received`, write the audit row (`previousStatus: null`,
+  `changedBy: partnerId` from the request body), return `201` with the
+  full order.
+- Same `Idempotency-Key`, same `partnerId`, replayed → return the
+  **current state** of the original row (not a snapshot of its state at
+  creation time — if it has since transitioned, the replay reflects
+  that) as `201` (not a new row, not a `409`), matched by the unique DB
   constraint, not an application-level lookup-then-insert (see
   `database-conventions`).
-- Same `Idempotency-Key`, different body → idempotency keys are keyed on
-  the header alone, not the body. Return the original order and emit a
-  structured warning log describing the mismatch.
+- Same `Idempotency-Key`, same `partnerId`, different body → idempotency
+  keys are keyed on the header (scoped per partner) alone, not the body.
+  Return the original order as `201` (same status code as any other
+  replay) and emit a structured warning log describing the mismatch.
+- Same `Idempotency-Key`, **different** `partnerId` → no collision by
+  construction, since the constraint is `(partnerId, idempotencyKey)`
+  (see §2). Each partner has an independent key space; this is simply a
+  new insert for that partner.
 - Missing `Idempotency-Key` header → `400`.
+- Present but malformed (non-UUID) `Idempotency-Key` → `400`.
 - Missing or invalid required field → `400`, with a message identifying
   the offending field.
+
+**Response body** (`201`, also the shape returned by `GET /orders/:id`
+and `PATCH /orders/:id/status`):
+
+```json
+{
+  "id": "b3f1c2e4-...",
+  "partnerId": "b3f1...uuid",
+  "patientReference": "PT-2026-00417",
+  "requestedLocation": "Lagos Diagnostics, Ikeja",
+  "priority": "routine",
+  "status": "received",
+  "createdAt": "2026-07-08T10:00:00.000Z",
+  "updatedAt": "2026-07-08T10:00:00.000Z"
+}
+```
+
+`idempotencyKey` is **not** included in the response — it is a
+replay-detection mechanism for the client that already holds it, not
+data the API needs to echo back, and the response interceptor (per
+`validation-and-guards`) strips it along with any other
+internal-only fields before the response leaves the process.
 
 ### `GET /orders`
 
@@ -143,7 +194,13 @@ Validation:
 
 - Invalid `status` → `400`
 - Invalid `partnerId` → `400`
-- `pageSize > 100` → clamp to `100`
+- `page` non-integer, zero, or negative → `400`
+- `pageSize` non-integer, zero, or negative → `400`
+- `pageSize > 100` → clamp to `100` (this is the one out-of-range case
+  that clamps instead of rejecting, since an over-large request is
+  harmless to cap; every other invalid value above is a `400`)
+- No orders match the filters → `200` with `data: []`, `total: 0`, and
+  the requested `page`/`pageSize` echoed back (not an error)
 
 ### `GET /orders/:id`
 
@@ -166,11 +223,19 @@ required by the exercise.
 
 Behavior:
 
-- Valid transition → `200`; audit row written in the same transaction.
+- Valid transition → `200`, body shaped per the response example in §4
+  (`POST /orders`); audit row written in the same transaction
+  (`changedBy: "system"` — the request body carries no partner
+  identity, and authentication is out of scope, §8).
 - Invalid transition → `409`; response includes both `from` and `to`
-  states.
+  states (see §5 for the exact shape).
 - Unknown order → `404`.
 - Invalid or missing status → `400`.
+
+**Validation order when multiple failures apply** (e.g. an unknown order
+id *and* an invalid `status` value in the same request): body validation
+(the DTO pipe) runs before the order is looked up, so `400` wins over
+`404` whenever both would otherwise apply.
 
 ### `GET /health`
 
@@ -208,17 +273,49 @@ expose that state.
 
 ## 5. Error shape
 
+Every endpoint returns errors with this base shape, shown here for an
+unrelated `404` so it's clear this is the shared envelope and not
+specific to any one exception type:
+
+```json
+{
+  "statusCode": 404,
+  "error": "OrderNotFoundException",
+  "message": "Order 123 not found",
+  "path": "/orders/123",
+  "timestamp": "2026-07-07T10:00:00.000Z",
+  "correlationId": "b6e2b5b0-...-uuid"
+}
+```
+
+- `message` is always a **single string**, never an array — the global
+  exception filter's `exceptionFactory` flattens NestJS's default
+  per-constraint array (e.g. multiple failing `class-validator` rules)
+  into one string before it reaches the client. This keeps the shape
+  uniform regardless of how many validation rules failed.
+- `correlationId` echoes the request correlation id generated by the
+  logging middleware (§6/§7), so a client-reported error can be matched
+  to server-side logs.
+
+`InvalidTransitionException` (409, from `PATCH /orders/:id/status`)
+extends the base shape with two additional fields, since the transition
+endpoint's contract (§4) requires both states to be programmatically
+inspectable, not just embedded in the message text:
+
 ```json
 {
   "statusCode": 409,
   "error": "InvalidTransitionException",
   "message": "Cannot transition from completed to accepted",
   "path": "/orders/123/status",
-  "timestamp": "2026-07-07T10:00:00.000Z"
+  "timestamp": "2026-07-07T10:00:00.000Z",
+  "correlationId": "b6e2b5b0-...-uuid",
+  "from": "completed",
+  "to": "accepted"
 }
 ```
 
-Every endpoint returns errors in this format.
+Every other exception type uses the base shape unmodified.
 
 ## 6. Instrumentation
 
@@ -240,15 +337,19 @@ into an environment that scrapes them.
 - **Configuration:** database connection, port, `FRONTEND_ORIGIN`, and
   pool size supplied via environment variables and validated during
   startup.
-- **Logging:** structured logs with a request correlation ID. Never log
-  `patientReference` alongside enough context to identify an individual.
+- **Logging:** structured logs with a request correlation ID.
+  `patientReference` is never logged, full stop — not in any log
+  statement, at any log level, regardless of what other context is or
+  isn't present alongside it.
 - **Security:** `helmet()` enabled; CORS restricted to
-  `FRONTEND_ORIGIN`; rate limiting applied to mutating endpoints;
-  ValidationPipe configured with `whitelist`,
-  `forbidNonWhitelisted`, and `transform`.
-- **Performance:** unique index on `idempotencyKey`; composite index on
-  `(partnerId, status)`; bounded pagination; configurable TypeORM
-  connection pool.
+  `FRONTEND_ORIGIN`; rate limiting applied to mutating endpoints
+  (`POST /orders`, `PATCH /orders/:id/status`) at **20 requests/minute
+  per IP** — a starting default appropriate for this exercise's scale,
+  adjustable via config without a spec change; ValidationPipe configured
+  with `whitelist`, `forbidNonWhitelisted`, and `transform`.
+- **Performance:** composite unique index on `(partnerId, idempotencyKey)`
+  (§2); composite index on `(partnerId, status)`; bounded pagination;
+  configurable TypeORM connection pool.
 
 ## 8. Out of scope
 
@@ -258,19 +359,24 @@ into an environment that scrapes them.
 - Cancellation side effects (notifications, billing reversals, refunds).
 - Metrics endpoint.
 - Multi-region or highly available PostgreSQL deployments.
+- An audit-trail read endpoint (e.g. `GET /orders/:id/audit`). The
+  `OrderStatusAudit` table exists for internal state reconstruction and
+  investigation, not as a client-facing resource for this exercise.
 
 ## 9. Known limitation: `cancelled` and the frontend harness
 
 The provided frontend was built against the original five-status
-contract, so its transition controls may not expose `cancelled`.
+contract, so its transition controls, and its `GET /orders` **status
+filter dropdown**, may not expose `cancelled` as a selectable option
+(`provided/frontend/src/types.ts` types `OrderStatus` with five values).
 
 Consequently:
 
-- The API fully supports `cancelled` transitions.
+- The API fully supports `cancelled` transitions and filtering.
 - Automated integration tests verify this behavior.
 - Manual verification can be performed using either `curl` or the
   generated Swagger UI (`/api-docs`) if the frontend cannot issue the
-  transition.
+  transition or select the filter.
 - This is an expected consequence of intentionally extending the
   original status model rather than a defect in either implementation.
 
@@ -311,11 +417,49 @@ transition.
 
 ## 12. Self-review notes
 
-*(Completed after implementation.)*
+### `@spec-critic` pass (Phase 1)
 
-- Where the implementation diverged from this specification, and why.
+18 findings were raised against the original draft. All were resolved
+directly in this document rather than deferred, except where noted:
+
+- **Idempotency key scope** (blocking): the original draft modeled a
+  single global unique constraint on `idempotencyKey`, which would let
+  two different partners' orders collide and leak across tenants on a
+  key collision. Resolved by scoping the constraint to
+  `(partnerId, idempotencyKey)` — see §2 and §4.
+- **409 error shape inconsistency** (blocking): §4 required `from`/`to`
+  as response fields, but §5's example only embedded them in the message
+  string, and the `error-handling` skill's own example matched the
+  under-specified version. Resolved by extending the base error shape
+  for `InvalidTransitionException` specifically (§5), and updating the
+  `error-handling` skill's example to match so the two don't drift back
+  out of sync.
+- **Missing response body shape** (blocking): no field-level example
+  existed for what `POST`/`GET`/`PATCH` return. Added to §4, and decided
+  `idempotencyKey` is stripped from responses (internal replay-detection
+  data, not client-facing).
+- **`changedBy` on `PATCH`**: resolved as `"system"`, since the request
+  body carries no partner identity and auth is out of scope (§8).
+- Remaining findings (pagination edge cases, self-transition semantics,
+  malformed-UUID handling, field max-lengths, validation precedence,
+  empty-result shape, bright-line PII logging rule, concrete rate limit,
+  audit-endpoint scope note, `cancelled` filter limitation,
+  different-body-replay status code, validation-error `message` type,
+  `correlationId` in the error shape, and "original order" meaning
+  current state rather than a creation-time snapshot) were all editorial
+  clarifications with a single defensible resolution — folded directly
+  into §2–§9 above rather than listed separately here. That's 4 named
+  above plus these 14, accounting for all 18 raised findings.
+- **Deferred, not fixed:** none. Every flagged gap had either an
+  unambiguous resolution or, for the one genuine design decision
+  (idempotency key scope), a decision made and recorded above.
+
+### To be completed after implementation
+
 - Any transition or idempotency edge cases discovered during testing.
-- Feedback from `@spec-critic` and how each finding was addressed.
 - Findings from the manual frontend pass that were not already covered
   by automated tests, including whether the `cancelled` transition had
-  to be exercised through `/api-docs`.
+  to be exercised through `/api-docs`, and whether the `GET /orders`
+  status filter needed the same `/api-docs` workaround (§9).
+- Where the implementation diverged from this specification, if at all,
+  and why.

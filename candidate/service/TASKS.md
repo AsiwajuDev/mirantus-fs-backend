@@ -19,9 +19,9 @@ scope (per the working agreement in root `CLAUDE.md`).
 - [x] Draft `SPEC.md`, including the `cancelled` state addition and its
       explicit deviation-from-brief flag, the logging-vs-metrics
       reasoning, and the harness compatibility note for `cancelled`
-- [ ] Run `@spec-critic` against `SPEC.md`; resolve or explicitly defer
+- [x] Run `@spec-critic` against `SPEC.md`; resolve or explicitly defer
       every flagged gap
-- [ ] This file (`TASKS.md`) reflects the resolved spec
+- [x] This file (`TASKS.md`) reflects the resolved spec
 
 ## Phase 2 — Scaffold
 
@@ -41,8 +41,9 @@ scope (per the working agreement in root `CLAUDE.md`).
 - [ ] `Order` entity (six-value `status` enum, including `cancelled`) +
       `OrderStatusAudit` entity
 - [ ] First migration: create both tables, both indexes:
-      `idx_orders_idempotency_key` unique,
-      `idx_orders_partner_status`
+      `idx_orders_idempotency_key` unique on `(partner_id, idempotency_key)`
+      — composite, not single-column, per SPEC.md §2 idempotency-key-scope
+      resolution — and `idx_orders_partner_status`
 - [ ] `database/data-source.ts` wired to env config
 - [ ] `@db-reviewer` run against the migrated local DB to confirm indexes
       exist as expected
@@ -59,7 +60,12 @@ scope (per the working agreement in root `CLAUDE.md`).
 - [ ] Idempotent-insert logic on the repository layer:
       insert, catch unique-violation, return existing
       + unit tests covering the concurrent-replay case, including the
-      different-body-same-key case from SPEC.md §4
+      different-body-same-key case from SPEC.md §4, **and** the
+      cross-tenant case from SPEC.md §2/§4: two different `partnerId`s
+      submitting the identical `Idempotency-Key` value must each get
+      their own independently-created order, with no leakage of one
+      partner's order to the other (this is the scenario the composite
+      `(partnerId, idempotencyKey)` unique constraint exists to prevent)
 - [ ] Status-update service method wraps the order update and audit insert
       in a single DB transaction (SPEC.md §2/§4); add a unit or integration
       test that forces a failure mid-update (e.g. a bad audit insert) and
@@ -77,7 +83,7 @@ scope (per the working agreement in root `CLAUDE.md`).
 - [ ] `PATCH /orders/:id/status`
 - [ ] Global exception filter, custom exception classes:
       `OrderNotFoundException`, `InvalidTransitionException`,
-      409 body includes `from`/`to` fields per SPEC.md §4
+      409 body includes `from`/`to` fields per SPEC.md §5
 - [ ] `@code-reviewer` run on this diff before commit
 
 ## Phase 6 — Cross-cutting
@@ -100,6 +106,11 @@ scope (per the working agreement in root `CLAUDE.md`).
       Postgres container
 - [ ] Integration test: idempotency replay, asserted via row count,
       not just HTTP response
+- [ ] Integration test: cross-tenant idempotency key collision (same
+      `Idempotency-Key` value, two different `partnerId`s) creates two
+      separate orders, asserted via row count — confirms the composite
+      `(partnerId, idempotencyKey)` unique constraint actually prevents
+      the cross-tenant leak described in SPEC.md §2
 - [ ] Integration test: audit row written on every status change,
       including both `cancelled` paths
 - [ ] Integration test:

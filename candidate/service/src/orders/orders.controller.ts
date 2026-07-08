@@ -10,6 +10,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 
 import { IdempotencyKey } from './decorators/idempotency-key.decorator';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -31,11 +32,13 @@ export class OrdersController {
     return this.ordersService.createOrder(dto, idempotencyKey);
   }
 
+  @SkipThrottle()
   @Get()
   findAll(@Query() query: QueryOrdersDto): Promise<PaginatedOrdersResponse> {
     return this.ordersService.findAll(query);
   }
 
+  @SkipThrottle()
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string): Promise<Order> {
     return this.ordersService.getById(id);

@@ -4,8 +4,11 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+
+import { getCorrelationId } from '../correlation/correlation-context';
 
 interface ErrorResponseBody {
   statusCode: number;
@@ -13,18 +16,18 @@ interface ErrorResponseBody {
   message: string;
   path: string;
   timestamp: string;
+  correlationId?: string;
   from?: unknown;
   to?: unknown;
 }
 
 // Every error, of any kind, passes through here — per root CLAUDE.md's
 // non-negotiable, controllers/services never construct error JSON by
-// hand. `correlationId` (in SPEC.md §5's documented shape) is
-// deliberately omitted until Phase 6's request-correlation middleware
-// exists; a fabricated ID with nothing to correlate against would be
-// worse than the field's absence.
+// hand.
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(HttpExceptionFilter.name);
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
@@ -35,6 +38,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
       ? exception.getStatus()
       : HttpStatus.INTERNAL_SERVER_ERROR;
 
+    if (!isHttpException) {
+      // Unexpected failures must leave a trace somewhere — the generic
+      // 500 response deliberately tells the client nothing.
+      this.logger.error('Unhandled exception', {
+        error: exception instanceof Error ? exception.message : exception,
+        stack: exception instanceof Error ? exception.stack : undefined,
+      });
+    }
+
+    const correlationId = getCorrelationId();
+
     const body: ErrorResponseBody = {
       statusCode,
       error: isHttpException
@@ -43,6 +57,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       message: this.extractMessage(exception, isHttpException),
       path: request.url,
       timestamp: new Date().toISOString(),
+      ...(correlationId !== undefined ? { correlationId } : {}),
     };
 
     const exceptionResponse = isHttpException

@@ -586,16 +586,154 @@ it for real.
 
 ## Phase 6 — Cross-cutting
 
-- [ ] `GET /health`, `GET /ready`
-- [ ] Structured logging + request correlation id middleware
-      (the chosen instrumentation approach per SPEC.md §6)
-- [ ] `helmet()`, CORS restricted to `FRONTEND_ORIGIN`,
-      `@nestjs/throttler` on mutating endpoints
-- [ ] `@nestjs/swagger` wired up in `main.ts`; confirm `/api-docs` renders
-      correctly and reflects actual validation rules, including the
-      `cancelled` status value
-- [ ] Startup env validation (fail fast on missing required var)
-- [ ] `@security-auditor` run against the full checklist
+Done as one pass across all six boxes, same cadence as Phase 5 (per
+explicit user instruction): implement everything, one `@security-auditor`
+pass, one commit.
+
+- [x] `GET /health`, `GET /ready`. `HealthController`/`HealthService`
+      (previously empty Phase 2 stubs) — `@Controller()` with no prefix
+      (`/health` and `/ready` are top-level sibling routes per SPEC.md
+      §4, not nested under `/health`). `/health` never touches the
+      database; `/ready` runs `SELECT 1` via the injected `DataSource`
+      and returns `503` (via `ServiceUnavailableException`, no internal
+      detail in the message) if it throws. `@SkipThrottle()` on the
+      controller — liveness/readiness checks must not be rate-limited.
+- [x] Structured logging + request correlation id middleware.
+      `src/common/correlation/`: `correlation-context.ts` wraps a single
+      `AsyncLocalStorage` instance (`runWithCorrelationId`/`getCorrelationId`)
+      so a correlation ID reaches arbitrary service-layer log calls
+      (e.g. `OrdersService.createOrder`'s existing warn log) without
+      making every provider `REQUEST`-scoped, which `nestjs-architecture`
+      flags as a throughput cost. `correlation.middleware.ts` reads
+      `x-correlation-id` if the client supplied one (cross-service
+      tracing), else generates one, echoes it back as a response header,
+      and runs the rest of the request inside that context. Registered
+      globally via `AppModule implements NestModule`.
+      `src/common/logging/app-logger.service.ts`: a `LoggerService`
+      implementation registered via `app.useLogger()`, so it captures
+      both Nest's own framework logs and every existing
+      `new Logger(...)` call site (e.g. `OrdersService`) without
+      changing any of them. Writes one structured JSON line per call,
+      merging metadata-object arguments in (per `logging-and-audit`'s
+      own example shape) and treating a trailing string argument as
+      Nest's conventional `context` label. **Enforces SPEC.md §7's
+      `patientReference`-never-logged rule centrally**, recursively
+      redacting that key from any logged object/array, rather than
+      trusting every call site's discipline.
+      `HttpExceptionFilter` now includes `correlationId` in every error
+      body when a request context is active (the field SPEC.md §5
+      documents but Phase 5 deliberately left out, since the middleware
+      didn't exist yet) — closes that gap for real. Also now logs
+      unexpected (non-`HttpException`) errors via `this.logger.error(...)`
+      before returning the generic `500`, closing a non-blocking gap
+      `@code-reviewer` flagged in Phase 5 (previously such failures left
+      zero trace anywhere).
+- [x] `helmet()`, CORS restricted to `FRONTEND_ORIGIN`, `@nestjs/throttler`
+      on mutating endpoints. `helmet()`/`enableCors()` added to
+      `configure-app.ts`. Throttler: `ThrottlerModule.forRoot([{ ttl:
+      60_000, limit: 20 }])` (SPEC.md §7: 20 req/min/IP) plus a global
+      `APP_GUARD` in `AppModule`, per `nestjs-architecture`'s "apply as
+      global guard... new endpoints inherit protection automatically" —
+      read endpoints (`GET /orders`, `GET /orders/:id`, both health
+      routes) opt **out** via `@SkipThrottle()` rather than mutating
+      endpoints opting in, so a future mutating endpoint is protected by
+      default without anyone remembering to add a decorator.
+- [x] `@nestjs/swagger` wired up in `main.ts` (via `configure-app.ts`,
+      same shared-pipeline reasoning as Phase 5); confirm `/api-docs`
+      renders correctly and reflects actual validation rules, including
+      the `cancelled` status value. Per `nestjs-architecture`'s bootstrap
+      ordering: Swagger setup happens **before** `helmet()` (helmet's CSP
+      can otherwise block Swagger UI's inline scripts). Verified two
+      ways: an integration test asserts `/api-docs-json`'s
+      `UpdateOrderStatusDto` schema enum contains `cancelled`, and a
+      manual `curl http://localhost:3000/api-docs` (dev server actually
+      running) returns `200` with the real Swagger UI page.
+- [x] Startup env validation (fail fast on missing required var).
+      `src/common/config/env.validation.ts`: a `class-validator`-checked
+      `EnvironmentVariables` class (not Joi — `class-validator`/
+      `class-transformer` are already the project's validation stack;
+      adding a new dependency for the same job wasn't justified), wired
+      via `ConfigModule.forRoot({ validate: validateEnv })`. Requires
+      `DATABASE_URL`/`FRONTEND_ORIGIN` (both checked with `@IsUrl`,
+      `require_tld: false` so `localhost` passes, `require_protocol: true`
+      so a bare non-URL string like `"not-a-url"` is actually rejected —
+      the first version without `require_protocol` silently accepted it).
+      `PORT`/`DB_POOL_SIZE` optional (both already have runtime
+      defaults elsewhere) but type/range-checked if present, via
+      explicit `@Type(() => Number)` — not `enableImplicitConversion`,
+      which depends on `design:type` reflection metadata that isn't
+      reliably present outside Nest's own DI-instantiated context
+      (confirmed: a standalone unit test calling `validateEnv()` directly
+      threw `Reflect.getMetadata is not a function` without an explicit
+      `import 'reflect-metadata'` in this module — added one, with the
+      failure documented in a comment so it isn't "fixed" back out
+      later).
+      **Test-isolation bug found and fixed while adding this phase's
+      integration tests, unrelated to any single box above:** adding
+      three new e2e test files (health, observability, throttle) meant
+      five `.e2e-spec.ts` files now run against the *same* live
+      `service-postgres-1` container. Jest runs different test files in
+      parallel workers by default, and every existing e2e file's
+      `afterEach` does a table-wide `DELETE FROM orders`/
+      `order_status_audit` (not scoped to its own test data) — with more
+      files running concurrently, one file's cleanup began racing
+      another's in-flight transaction, surfacing as a real, intermittent
+      `order_status_audit_order_id_fkey` violation (confirmed via a
+      failing `PATCH` test, not a mock). Fixed by setting
+      `"maxWorkers": 1` in `test/jest-e2e.json` — standard practice for
+      integration suites sharing one mutable external resource. Reran
+      `npm run test:e2e` three times consecutively to confirm the fix
+      isn't just a lucky pass (timing bugs can hide); all three green.
+- [x] `@security-auditor` run against the full checklist. Found two
+      blocking issues, both real and fixed, not hypothetical:
+      **1. `/api-docs`/`/api-docs-json` bypassed helmet, CORS, and
+      correlation IDs entirely.** `SwaggerModule.setup()` mounts a raw
+      Express sub-router that fully handles its own responses, so
+      anything registered *after* it in `configure-app.ts` never ran
+      for those routes — confirmed live via curl (no CSP/`nosniff`
+      headers, no CORS header). This directly contradicted
+      `nestjs-architecture`'s stated ordering (Swagger before helmet,
+      to avoid its CSP blocking Swagger UI's inline scripts) — but that
+      reasoning doesn't hold for *this* app: the generated Swagger HTML
+      uses only external `<script src>` tags, no inline scripts, so
+      reordering helmet()/`cors()` *before* Swagger fixes the header gap
+      with no loss of Swagger UI functionality, re-verified by curling
+      `/api-docs` with the new order (renders fully, now carries the
+      CSP header). One residual gap accepted rather than chased further:
+      `x-correlation-id` still doesn't reach `/api-docs*`, since Nest's
+      own middleware pipeline (unlike helmet/cors, which are raw
+      adapter-level Express middleware) only wraps routes registered
+      through Nest's own module system, which Swagger's sub-router
+      bypasses regardless of order — low severity, since that route has
+      no business logic or PII to correlate. Added a regression
+      integration test asserting `/api-docs` now carries both headers.
+      Also fixed, same pass: CORS now reads `FRONTEND_ORIGIN` through
+      the validated `ConfigService` rather than `process.env` directly
+      (a medium-severity hygiene gap the auditor flagged — verified it
+      wasn't actually exploitable as a fail-open wildcard-CORS bug, but
+      closed the drift risk anyway).
+      **2. `patientReference` redaction was key-name-only, never applied
+      to logged string *content*.** `HttpExceptionFilter` logs unexpected
+      errors' raw `exception.message`/`.stack`; Postgres embeds literal
+      column values in constraint-violation detail text
+      (`Key (patient_reference)=(...)`). No constraint touches this
+      column today, so the exact leak wasn't reachable yet — but
+      SPEC.md §7's wording ("full stop... regardless of what other
+      context is or isn't present") doesn't permit relying on today's
+      schema staying that way. Fixed in `AppLogger`: any string —
+      whether the primary `message` argument or a string value nested
+      in metadata — that merely *mentions* `patientReference`/
+      `patient_reference` is now redacted in full, not just object
+      properties literally named that. Deliberately coarse (redacts the
+      whole string, not just the value) rather than parsing every
+      driver's error format, so it can't be bypassed by a format change.
+      Added four tests covering: the primary-message case, the
+      nested-string-in-metadata case, an array-of-objects case, and a
+      confirmation that unrelated messages pass through untouched.
+      `npm run test -- --coverage`: 16 suites, 101 tests, 100% on every
+      touched file. `npm run test:e2e`: 5 suites, 29 tests, reran three
+      times to confirm stability, all green. `npm run lint`: clean
+      (same pre-existing unrelated warning).
 
 ## Phase 7 — Tests
 

@@ -1,9 +1,11 @@
 import {
   BadRequestException,
   HttpException,
+  Logger,
   type ArgumentsHost,
 } from '@nestjs/common';
 
+import { runWithCorrelationId } from '../../../src/common/correlation/correlation-context';
 import { HttpExceptionFilter } from '../../../src/common/filters/http-exception.filter';
 import { InvalidTransitionException } from '../../../src/orders/exceptions/invalid-transition.exception';
 import { OrderNotFoundException } from '../../../src/orders/exceptions/order-not-found.exception';
@@ -44,6 +46,18 @@ function buildHost(path: string) {
 
 describe('HttpExceptionFilter', () => {
   const filter = new HttpExceptionFilter();
+
+  let loggerErrorSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    loggerErrorSpy = jest
+      .spyOn(Logger.prototype, 'error')
+      .mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    loggerErrorSpy.mockRestore();
+  });
 
   it('shapes OrderNotFoundException as the documented base 404 body', () => {
     const { host, status, body } = buildHost('/orders/123');
@@ -117,10 +131,11 @@ describe('HttpExceptionFilter', () => {
     expect(body().message).toBe('Http Exception');
   });
 
-  it('maps a non-HttpException to a generic 500 without leaking internals', () => {
+  it('maps a non-HttpException to a generic 500 without leaking internals, but logs it server-side', () => {
     const { host, status, body } = buildHost('/orders');
+    const error = new Error('connection refused: pg://secret@host');
 
-    filter.catch(new Error('connection refused: pg://secret@host'), host);
+    filter.catch(error, host);
 
     expect(status).toHaveBeenCalledWith(500);
     expect(body()).toMatchObject({
@@ -128,5 +143,33 @@ describe('HttpExceptionFilter', () => {
       error: 'InternalServerError',
       message: 'Internal server error',
     });
+    expect(body().message).not.toContain('pg://secret@host');
+    expect(loggerErrorSpy).toHaveBeenCalledWith(
+      'Unhandled exception',
+      expect.objectContaining({ error: error.message }),
+    );
+  });
+
+  it('handles a thrown non-Error value without crashing', () => {
+    const { host, status, body } = buildHost('/orders');
+
+    filter.catch('a plain string was thrown', host);
+
+    expect(status).toHaveBeenCalledWith(500);
+    expect(body().message).toBe('Internal server error');
+    expect(loggerErrorSpy).toHaveBeenCalledWith(
+      'Unhandled exception',
+      expect.objectContaining({ error: 'a plain string was thrown' }),
+    );
+  });
+
+  it('includes correlationId in the body when a request correlation context is active', () => {
+    const { host, body } = buildHost('/orders/123');
+
+    runWithCorrelationId('test-correlation-id', () => {
+      filter.catch(new OrderNotFoundException('123'), host);
+    });
+
+    expect(body().correlationId).toBe('test-correlation-id');
   });
 });

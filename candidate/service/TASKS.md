@@ -254,10 +254,39 @@ scope (per the working agreement in root `CLAUDE.md`).
       itself, so self-transitions fall through to the catch-all `409`
       per SPEC.md §3. Pure data — no `TransitionGuard` class or tests
       yet, that's the next task.
-- [ ] `TransitionGuard` + unit tests (100% coverage target) — every
+- [x] `TransitionGuard` + unit tests (100% coverage target) — every
       valid transition including both `cancelled` paths (from `accepted`
       and from `in_progress`), plus at least one invalid transition per
-      state
+      state. `src/orders/transition-guard.ts`: a plain `@Injectable()`
+      class with `assertValid(current, next)`, matching the
+      `validation-and-guards` skill's example exactly — reads from the
+      Phase 4 `VALID_TRANSITIONS` table rather than duplicating the
+      rules. **Scope note (pre-cleared with the user before proceeding):**
+      this task's literal wording doesn't mention exceptions, but
+      `InvalidTransitionException` is what Phase 5 later lists — and
+      `TransitionGuard` cannot throw anything meaningful without it. Added
+      a minimal `src/orders/exceptions/invalid-transition.exception.ts`
+      now (`ConflictException` subclass exposing `from`/`to` as public
+      fields, matching SPEC.md §5's 409 body) so the guard isn't built
+      against a throwaway stub. Phase 5 still owns wiring this into the
+      global exception filter, `OrderNotFoundException`, and the rest of
+      the response shape — this task only adds the one class the guard
+      needs. **Correction, found by `@code-reviewer`:** the first version
+      passed a plain string to `super()`, so `from`/`to` only existed as
+      instance fields, not in `exception.getResponse()` — the exact
+      mechanism the `error-handling` skill says the Phase 5 global filter
+      must use, with no per-exception-type special casing. That would
+      have silently dropped `from`/`to` from the real 409 response body.
+      Fixed by passing `{ message, from, to }` to `super()` per the
+      skill's own canonical example, keeping the instance fields too for
+      direct typed access. Tests: `test/unit/orders/transition-guard.spec.ts`,
+      all six valid transitions and one invalid transition per state
+      (including all three terminal states), plus a dedicated case
+      asserting the thrown exception's `from`/`to` fields, `.message`,
+      and — per the same review finding — `getResponse()`'s shape
+      directly, not just the instance fields. `npm run test --
+      --coverage` confirms 100% stmt/branch/func/line coverage on both
+      new files; full suite (5/5, 17 tests) green.
 - [ ] Idempotent-insert logic on the repository layer:
       insert, catch unique-violation, return existing
       + unit tests covering the concurrent-replay case, including the

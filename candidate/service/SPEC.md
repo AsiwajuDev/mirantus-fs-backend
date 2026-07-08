@@ -454,12 +454,66 @@ directly in this document rather than deferred, except where noted:
   unambiguous resolution or, for the one genuine design decision
   (idempotency key scope), a decision made and recorded above.
 
-### To be completed after implementation
+### Phase 9 — end-to-end harness verification
 
-- Any transition or idempotency edge cases discovered during testing.
-- Findings from the manual frontend pass that were not already covered
-  by automated tests, including whether the `cancelled` transition had
-  to be exercised through `/api-docs`, and whether the `GET /orders`
-  status filter needed the same `/api-docs` workaround (§9).
-- Where the implementation diverged from this specification, if at all,
-  and why.
+Both servers were run locally (backend on `:3000` against the real
+`service-postgres-1` container, frontend dev server on `:5173` via
+`provided/frontend`'s own `npm run dev`, `.env` copied from
+`.env.example` unmodified — `VITE_API_BASE_URL=http://localhost:3000`
+matches the backend's default and the backend's `FRONTEND_ORIGIN`
+matches `:5173`, so no CORS mismatch was introduced by this pass).
+
+**Verification method note:** this pass was done at the HTTP/API level
+(`curl` against the running backend), not by driving the harness UI in
+a real browser — no browser-automation tool is available in this
+environment. Every scenario Phase 9's checklist names was reproduced at
+the API level the harness itself would call; the literal
+visual/interactive confirmation (does the table render six columns, does
+the error banner show readable text, does the "reuse last key" checkbox
+work in the actual form) is left for a human to confirm directly in a
+browser at `http://localhost:5173` — not claimed here without having
+been observed.
+
+Findings, all via direct API calls mirroring what the harness's own
+`fetch` calls would send (`Origin: http://localhost:5173` on every
+request):
+
+- **CORS preflight** (`OPTIONS /orders` with
+  `Access-Control-Request-Headers: content-type,idempotency-key`):
+  `204`, `Access-Control-Allow-Origin: http://localhost:5173`,
+  `Access-Control-Allow-Headers` echoes the requested headers back.
+  The harness would not see a CORS failure or a "couldn't reach the
+  service" banner from this backend as configured.
+- **`POST /orders`**: `201`, response carries all six fields the
+  harness table expects (`id`, `partnerId`, `patientReference`,
+  `requestedLocation`, `priority`, `status`) plus `createdAt`/`updatedAt`,
+  and correctly excludes `idempotencyKey`.
+- **Idempotency replay** (same `Idempotency-Key`, identical body, two
+  requests): both responses return the identical `id` — the "reuse last
+  key" toggle's underlying behavior confirmed at the row level, not just
+  that the UI doesn't visibly duplicate a row.
+- **Invalid transition** (`received → completed`, skipping
+  `accepted`/`in_progress`): `409`, body includes `from`, `to`,
+  `correlationId`, and a readable `message` — exactly the shape the
+  harness's debug panel is expected to display.
+- **`accepted → cancelled`**: confirmed reachable and correct via direct
+  `PATCH` calls (`received → accepted → cancelled`, final `status:
+  "cancelled"` in the response). Per §9, the harness UI's transition
+  control is expected not to expose `cancelled` as a selectable option
+  at all (it was built against the five-status contract) — this was not
+  re-confirmed visually in this pass, but is a pre-existing, already-
+  documented limitation, not a new finding.
+- **Filters**: `GET /orders?partnerId=<id>` returned only that partner's
+  orders; `GET /orders?status=cancelled&partnerId=<id>` returned only
+  the matching row. Per §9, the harness's status filter dropdown may not
+  offer `cancelled` as an option — same pre-existing limitation, not
+  re-confirmed visually here.
+- **Pagination**: `GET /orders?pageSize=1&page=1` and `...&page=2`
+  returned different orders with a consistent `total` across both calls
+  and no overlap — confirms the `createdAt DESC` ordering (added in
+  Phase 5 specifically so offset pagination is deterministic) actually
+  holds under a real repeated query, not just in theory.
+
+No implementation divergences from this specification were found during
+this pass. Both dev servers were left running for the user's own visual
+confirmation pass.

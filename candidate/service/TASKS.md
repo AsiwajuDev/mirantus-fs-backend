@@ -65,7 +65,24 @@ scope (per the working agreement in root `CLAUDE.md`).
       all three verified via `git check-ignore -v` against the root
       `.gitignore` (no separate `candidate/service/.gitignore` exists
       or is needed); no file changes required for this task
-- [ ] `docker-compose.yml` — Postgres service, correct port, named volume
+- [x] `docker-compose.yml` — Postgres service, correct port, named volume.
+      `postgres:16-alpine`, port bound to `127.0.0.1:5432` (loopback
+      only, per `@code-reviewer` hardening suggestion), named volume
+      `orders_postgres_data`, matches `.env.local`'s `DATABASE_URL`
+      (user/pass `postgres`, db `orders`), healthcheck
+      `pg_isready -U postgres -d orders`. Validated on this machine via
+      `docker compose config` only (syntax/interpolation — no daemon
+      needed). **Not yet verified end-to-end on this machine:** the
+      Docker daemon (OrbStack) isn't running here, so the container
+      itself hasn't actually been started locally. `@code-reviewer` did
+      independently run `docker compose up -d` in its own separate
+      sandbox (which had Docker available) and confirmed the container
+      starts, reports healthy, and the exact `.env.local` credentials
+      connect successfully — real signal the file is correct, but not a
+      substitute for verifying on this machine. Deferred, at the user's
+      request, until Postgres is next needed (Phase 3 migrations) —
+      Phase 0's matching `docker compose up -d` box stays unchecked
+      until then too.
 - [ ] `.env.example` committed; real `.env` not committed;
       `FRONTEND_ORIGIN=http://localhost:5173` set so the harness's CORS
       requirement is satisfied by default, not an afterthought

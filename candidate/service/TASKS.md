@@ -91,8 +91,15 @@ scope (per the working agreement in root `CLAUDE.md`).
       this bullet, but the natural extension of "set a working default,
       not an afterthought" now that the compose file exists) — `.env`/
       `.env.local` confirmed still gitignored, not committed.
-- [ ] `npm run start:dev` boots cleanly with no leftover default route
-      responding on `/` — confirms the boilerplate removal actually took
+- [x] `npm run start:dev` boots cleanly with no leftover default route
+      responding on `/` — confirms the boilerplate removal actually took.
+      Verified: server started clean (0 compile errors, `OrdersModule`/
+      `HealthModule` both initialized, routes `{/orders}`/`{/health}`
+      registered), `curl GET /` → `404` (no default route survives).
+      `GET /health` → `404` too, but that's expected: `HealthController`
+      is still an empty generated scaffold with no handlers yet — the
+      actual `GET /health` implementation is Phase 6's job, not this
+      one's.
 
 ## Phase 3 — Data layer
 

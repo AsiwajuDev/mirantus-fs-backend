@@ -218,8 +218,30 @@ scope (per the working agreement in root `CLAUDE.md`).
       required var) stays Phase 6's job, not this one's — only
       `DATABASE_URL` got a guard here, as a direct, unavoidable
       consequence of using it at all.
-- [ ] `@db-reviewer` run against the migrated local DB to confirm indexes
-      exist as expected
+- [x] `@db-reviewer` run against the migrated local DB to confirm indexes
+      exist as expected. **Substitution note:** the `postgres` MCP
+      server wasn't actually connected in-session (`ListMcpResourcesTool`
+      showed nothing named `postgres`). Root cause found and fixed
+      separately (commit `561d836`): `.mcp.json` substituted
+      `${DATABASE_URL}` from the parent shell, which this project never
+      exports (kept in `.env.local` instead) — hardcoded the local dev
+      connection string. That fix needs a Claude Code session restart
+      to take effect, and there's no tool available mid-session to
+      force an MCP reconnect. Rather than leave this task blocked, ran
+      the same checks `@db-reviewer` would have, directly via `psql`
+      against `service-postgres-1`: `\d orders`/`\d order_status_audit`
+      confirm every column/type/nullability/default; `\di` shows
+      exactly the 5 expected indexes and no stray ones (in particular,
+      no accidental single-column unique index on `idempotency_key`
+      alone, which would have silently reintroduced the cross-tenant
+      collision the composite constraint exists to prevent);
+      `pg_enum`/`pg_type` confirm both enum types have the exact
+      values in the exact order; `pg_constraint` confirms the audit
+      FK's `confdeltype = 'c'` (CASCADE); the `migrations` table
+      correctly shows the one migration applied. If a real MCP-based
+      `@db-reviewer` pass becomes possible later (after a restart),
+      it can be re-run, but this isn't blocking Phase 3 on a harness
+      limitation outside either of our control.
 
 ## Phase 4 — Core domain logic
 

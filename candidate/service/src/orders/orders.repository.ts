@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import {
+  DataSource,
+  type FindOptionsWhere,
+  QueryFailedError,
+  Repository,
+} from 'typeorm';
 
 import { OrderStatusAudit } from './entities/order-status-audit.entity';
 import { Order } from './entities/order.entity';
@@ -26,6 +31,21 @@ export interface IdempotentInsertResult {
   isNew: boolean;
 }
 
+export interface OrderFilters {
+  status?: OrderStatus;
+  partnerId?: string;
+}
+
+export interface PaginationParams {
+  page: number;
+  pageSize: number;
+}
+
+export interface PaginatedOrders {
+  data: Order[];
+  total: number;
+}
+
 @Injectable()
 export class OrdersRepository {
   constructor(
@@ -35,13 +55,30 @@ export class OrdersRepository {
 
   // Insert-first, per `database-conventions`: never SELECT-then-INSERT.
   // Concurrent duplicate requests are resolved by the database's unique
-  // constraint, not application-level locking.
+  // constraint, not application-level locking. A genuinely new order
+  // also needs its creation audit row — SPEC.md §4 requires it in the
+  // same transaction as the insert, so both happen together here rather
+  // than as a separate follow-up step.
   async insertIdempotent(
     input: CreateOrderInput,
   ): Promise<IdempotentInsertResult> {
     try {
-      const order = this.repository.create(input);
-      await this.repository.insert(order);
+      const order = await this.dataSource.transaction(async (manager) => {
+        const orderRepo = manager.getRepository(Order);
+        const newOrder = orderRepo.create(input);
+        newOrder.status = 'received';
+        await orderRepo.insert(newOrder);
+
+        await manager.getRepository(OrderStatusAudit).insert({
+          orderId: newOrder.id,
+          previousStatus: null,
+          newStatus: newOrder.status,
+          changedBy: input.partnerId,
+        });
+
+        return newOrder;
+      });
+
       return { order, isNew: true };
     } catch (err) {
       if (!this.isIdempotencyKeyViolation(err)) {
@@ -59,6 +96,32 @@ export class OrdersRepository {
     }
   }
 
+  async findById(id: string): Promise<Order | null> {
+    return this.repository.findOneBy({ id });
+  }
+
+  async findMany(
+    filters: OrderFilters,
+    pagination: PaginationParams,
+  ): Promise<PaginatedOrders> {
+    const where: FindOptionsWhere<Order> = {};
+    if (filters.status !== undefined) {
+      where.status = filters.status;
+    }
+    if (filters.partnerId !== undefined) {
+      where.partnerId = filters.partnerId;
+    }
+
+    const [data, total] = await this.repository.findAndCount({
+      where,
+      skip: (pagination.page - 1) * pagination.pageSize,
+      take: pagination.pageSize,
+      order: { createdAt: 'DESC' },
+    });
+
+    return { data, total };
+  }
+
   // logging-and-audit: order update + audit insert must be atomic — both
   // committed together, or neither. `changedBy` is the caller's job to
   // supply correctly (partnerId on creation, the literal "system" on the
@@ -70,14 +133,20 @@ export class OrdersRepository {
     changedBy: string,
   ): Promise<Order> {
     return this.dataSource.transaction(async (manager) => {
-      const updated = await manager.getRepository(Order).save({
-        ...order,
-        status: next,
-      });
+      const previousStatus = order.status;
+      // Mutate the existing `Order` instance rather than spreading it
+      // into a plain object literal — spreading drops the prototype, so
+      // `save()` would return a plain object that ResponseShapeInterceptor's
+      // class-transformer can't recognize as an `Order`, silently
+      // un-doing `idempotencyKey`'s `@Exclude()`.
+      const orderRepo = manager.getRepository(Order);
+      const updated = await orderRepo.save(
+        orderRepo.merge(order, { status: next }),
+      );
 
       await manager.getRepository(OrderStatusAudit).insert({
         orderId: order.id,
-        previousStatus: order.status,
+        previousStatus,
         newStatus: next,
         changedBy,
       });

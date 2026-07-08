@@ -29,35 +29,47 @@ function uniqueViolation(constraint: string): QueryFailedError {
 }
 
 describe('OrdersRepository', () => {
-  let create: jest.Mock;
-  let insert: jest.Mock;
-  let findOneByOrFail: jest.Mock;
+  let orderManagerCreate: jest.Mock;
+  let orderManagerInsert: jest.Mock;
   let orderManagerSave: jest.Mock;
+  let orderManagerMerge: jest.Mock;
   let auditManagerInsert: jest.Mock;
+  let findOneByOrFail: jest.Mock;
   let transaction: jest.Mock;
   let repository: OrdersRepository;
 
   beforeEach(() => {
-    create = jest.fn((input: CreateOrderInput) => ({ ...input }) as Order);
-    insert = jest.fn().mockResolvedValue(undefined);
+    orderManagerCreate = jest.fn(
+      (input: CreateOrderInput) => ({ ...input }) as Order,
+    );
+    orderManagerInsert = jest.fn().mockResolvedValue(undefined);
+    orderManagerSave = jest.fn((entity: Order) => Promise.resolve(entity));
+    // Mirrors real TypeORM Repository.merge: mutates and returns the
+    // first argument in place, preserving its prototype — this is
+    // exactly the behavior that matters here (see the bug this
+    // replaced: spreading into a plain object silently dropped `Order`'s
+    // prototype and, with it, ResponseShapeInterceptor's @Exclude()).
+    orderManagerMerge = jest.fn((entity: Order, partial: Partial<Order>) =>
+      Object.assign(entity, partial),
+    );
+    auditManagerInsert = jest.fn().mockResolvedValue(undefined);
     findOneByOrFail = jest.fn();
 
-    const typeOrmRepository = {
-      create,
-      insert,
-      findOneByOrFail,
-    } as unknown as Repository<Order>;
-
-    orderManagerSave = jest.fn((entity: Order) => Promise.resolve(entity));
-    auditManagerInsert = jest.fn().mockResolvedValue(undefined);
+    const orderManagerRepo = {
+      create: orderManagerCreate,
+      insert: orderManagerInsert,
+      save: orderManagerSave,
+      merge: orderManagerMerge,
+    };
+    const auditManagerRepo = { insert: auditManagerInsert };
 
     const manager = {
       getRepository: jest.fn((entity: unknown) => {
         if (entity === Order) {
-          return { save: orderManagerSave };
+          return orderManagerRepo;
         }
         if (entity === OrderStatusAudit) {
-          return { insert: auditManagerInsert };
+          return auditManagerRepo;
         }
         throw new Error(
           `unexpected entity passed to getRepository: ${String(entity)}`,
@@ -69,18 +81,30 @@ describe('OrdersRepository', () => {
       work(manager),
     );
 
+    const typeOrmRepository = {
+      findOneByOrFail,
+    } as unknown as Repository<Order>;
+
     const dataSource = { transaction } as unknown as DataSource;
 
     repository = new OrdersRepository(typeOrmRepository, dataSource);
   });
 
-  it('inserts a new order when the idempotency key is unused', async () => {
+  it('inserts a new order (status received) and writes its creation audit row in one transaction', async () => {
     const input = buildInput();
 
     const result = await repository.insertIdempotent(input);
 
     expect(result.isNew).toBe(true);
-    expect(result.order).toMatchObject(input);
+    expect(result.order).toMatchObject({ ...input, status: 'received' });
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(orderManagerInsert).toHaveBeenCalledWith(result.order);
+    expect(auditManagerInsert).toHaveBeenCalledWith({
+      orderId: result.order.id,
+      previousStatus: null,
+      newStatus: 'received',
+      changedBy: input.partnerId,
+    });
     expect(findOneByOrFail).not.toHaveBeenCalled();
   });
 
@@ -91,7 +115,9 @@ describe('OrdersRepository', () => {
       id: 'existing-id',
       status: 'accepted',
     } as Order;
-    insert.mockRejectedValueOnce(uniqueViolation('idx_orders_idempotency_key'));
+    orderManagerInsert.mockRejectedValueOnce(
+      uniqueViolation('idx_orders_idempotency_key'),
+    );
     findOneByOrFail.mockResolvedValueOnce(existing);
 
     const result = await repository.insertIdempotent(input);
@@ -102,6 +128,7 @@ describe('OrdersRepository', () => {
       partnerId: input.partnerId,
       idempotencyKey: input.idempotencyKey,
     });
+    expect(auditManagerInsert).not.toHaveBeenCalled();
   });
 
   it('returns the existing order (its current state) on a same-key replay with a different body', async () => {
@@ -118,7 +145,9 @@ describe('OrdersRepository', () => {
       id: 'existing-id',
       status: 'in_progress',
     } as Order;
-    insert.mockRejectedValueOnce(uniqueViolation('idx_orders_idempotency_key'));
+    orderManagerInsert.mockRejectedValueOnce(
+      uniqueViolation('idx_orders_idempotency_key'),
+    );
     findOneByOrFail.mockResolvedValueOnce(existing);
 
     const result = await repository.insertIdempotent(replayWithDifferentBody);
@@ -143,7 +172,7 @@ describe('OrdersRepository', () => {
 
   it('rethrows a unique violation on an unrelated constraint', async () => {
     const input = buildInput();
-    insert.mockRejectedValueOnce(uniqueViolation('orders_pkey'));
+    orderManagerInsert.mockRejectedValueOnce(uniqueViolation('orders_pkey'));
 
     await expect(repository.insertIdempotent(input)).rejects.toThrow(
       QueryFailedError,
@@ -154,20 +183,28 @@ describe('OrdersRepository', () => {
   it('rethrows a non-QueryFailedError unchanged', async () => {
     const input = buildInput();
     const unexpected = new Error('connection reset');
-    insert.mockRejectedValueOnce(unexpected);
+    orderManagerInsert.mockRejectedValueOnce(unexpected);
 
     await expect(repository.insertIdempotent(input)).rejects.toBe(unexpected);
     expect(findOneByOrFail).not.toHaveBeenCalled();
   });
 
   describe('applyStatusTransition', () => {
-    const order = {
-      id: 'order-1',
-      partnerId: 'partner-a',
-      status: 'received',
-    } as Order;
+    function buildOrder(): Order {
+      // A real Order instance, not a plain object cast — this is what
+      // distinguishes "merge in place" from "spread into a new plain
+      // object": only the former keeps the prototype (and therefore
+      // ResponseShapeInterceptor's @Exclude() metadata) intact.
+      return Object.assign(new Order(), {
+        id: 'order-1',
+        partnerId: 'partner-a',
+        status: 'received',
+      });
+    }
 
-    it('updates the order and writes the audit row inside one transaction', async () => {
+    it('updates the order in place (merge, not spread) and writes the audit row inside one transaction', async () => {
+      const order = buildOrder();
+
       const result = await repository.applyStatusTransition(
         order,
         'accepted',
@@ -175,17 +212,18 @@ describe('OrdersRepository', () => {
       );
 
       expect(transaction).toHaveBeenCalledTimes(1);
-      expect(orderManagerSave).toHaveBeenCalledWith({
-        ...order,
+      expect(orderManagerMerge).toHaveBeenCalledWith(order, {
         status: 'accepted',
       });
+      expect(orderManagerSave).toHaveBeenCalledWith(order);
       expect(auditManagerInsert).toHaveBeenCalledWith({
         orderId: order.id,
-        previousStatus: order.status,
+        previousStatus: 'received',
         newStatus: 'accepted',
         changedBy: 'partner-a',
       });
-      expect(result).toEqual({ ...order, status: 'accepted' });
+      expect(result).toBeInstanceOf(Order);
+      expect(result.status).toBe('accepted');
     });
 
     it('propagates a failure from the audit insert without swallowing it', async () => {
@@ -193,8 +231,67 @@ describe('OrdersRepository', () => {
       auditManagerInsert.mockRejectedValueOnce(auditFailure);
 
       await expect(
-        repository.applyStatusTransition(order, 'accepted', 'partner-a'),
+        repository.applyStatusTransition(buildOrder(), 'accepted', 'partner-a'),
       ).rejects.toBe(auditFailure);
+    });
+  });
+
+  describe('findById', () => {
+    it('delegates to findOneBy', async () => {
+      const findOneBy = jest.fn().mockResolvedValue(null);
+      const typeOrmRepository = { findOneBy } as unknown as Repository<Order>;
+      const repo = new OrdersRepository(typeOrmRepository, {
+        transaction,
+      } as unknown as DataSource);
+
+      const result = await repo.findById('order-1');
+
+      expect(findOneBy).toHaveBeenCalledWith({ id: 'order-1' });
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('findMany', () => {
+    it('builds a filtered, paginated query and returns data + total', async () => {
+      const findAndCount = jest.fn().mockResolvedValue([[{ id: 'o-1' }], 1]);
+      const typeOrmRepository = {
+        findAndCount,
+      } as unknown as Repository<Order>;
+      const repo = new OrdersRepository(typeOrmRepository, {
+        transaction,
+      } as unknown as DataSource);
+
+      const result = await repo.findMany(
+        { status: 'accepted', partnerId: 'partner-a' },
+        { page: 2, pageSize: 20 },
+      );
+
+      expect(findAndCount).toHaveBeenCalledWith({
+        where: { status: 'accepted', partnerId: 'partner-a' },
+        skip: 20,
+        take: 20,
+        order: { createdAt: 'DESC' },
+      });
+      expect(result).toEqual({ data: [{ id: 'o-1' }], total: 1 });
+    });
+
+    it('omits unset filters from the where clause', async () => {
+      const findAndCount = jest.fn().mockResolvedValue([[], 0]);
+      const typeOrmRepository = {
+        findAndCount,
+      } as unknown as Repository<Order>;
+      const repo = new OrdersRepository(typeOrmRepository, {
+        transaction,
+      } as unknown as DataSource);
+
+      await repo.findMany({}, { page: 1, pageSize: 20 });
+
+      expect(findAndCount).toHaveBeenCalledWith({
+        where: {},
+        skip: 0,
+        take: 20,
+        order: { createdAt: 'DESC' },
+      });
     });
   });
 });

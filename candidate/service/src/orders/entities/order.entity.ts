@@ -1,3 +1,4 @@
+import { Exclude } from 'class-transformer';
 import {
   Column,
   CreateDateColumn,
@@ -38,6 +39,10 @@ export class Order {
   })
   status!: OrderStatus;
 
+  // Never leaves the process — SPEC.md §4: it's a replay-detection
+  // mechanism for the client that already holds it, not response data.
+  // Stripped by the global ResponseShapeInterceptor.
+  @Exclude()
   @Column({ name: 'idempotency_key', type: 'uuid' })
   idempotencyKey!: string;
 

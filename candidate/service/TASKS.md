@@ -26,15 +26,25 @@ scope (per the working agreement in root `CLAUDE.md`).
 ## Phase 2 — Scaffold
 
 - [x] `nest new` into `candidate/service/`
-- [ ] Install core deps:
-      `@nestjs/typeorm`, `typeorm`, `pg`,
-      `@nestjs/config`, `class-validator`, `class-transformer`,
-      `helmet`, `@nestjs/throttler`, `@nestjs/swagger`
+- [x] Install core deps: `@nestjs/typeorm`, `typeorm`, `pg`,
+      `@nestjs/config`, `class-validator`, `class-transformer`, `helmet`,
+      `@nestjs/throttler`, `@nestjs/swagger`
+- [ ] Remove default boilerplate: `src/app.controller.ts`,
+      `src/app.controller.spec.ts`, `src/app.service.ts`, and their
+      registration in `app.module.ts` — none of it belongs in the final
+      service
+- [ ] Generate the `orders` module skeleton:
+      `nest g module orders && nest g controller orders && nest g service orders`
+      — per `nestjs-architecture` skill, everything for this feature
+      lives inside `src/orders/`, not scattered at the top of `src/`
+- [ ] Generate the `health` module skeleton the same way
 - [ ] Confirm `.gitignore` excludes `.env`, `node_modules`, `dist`
 - [ ] `docker-compose.yml` — Postgres service, correct port, named volume
 - [ ] `.env.example` committed; real `.env` not committed;
       `FRONTEND_ORIGIN=http://localhost:5173` set so the harness's CORS
       requirement is satisfied by default, not an afterthought
+- [ ] `npm run start:dev` boots cleanly with no leftover default route
+      responding on `/` — confirms the boilerplate removal actually took
 
 ## Phase 3 — Data layer
 

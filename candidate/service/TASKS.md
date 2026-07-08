@@ -287,7 +287,7 @@ scope (per the working agreement in root `CLAUDE.md`).
       directly, not just the instance fields. `npm run test --
       --coverage` confirms 100% stmt/branch/func/line coverage on both
       new files; full suite (5/5, 17 tests) green.
-- [ ] Idempotent-insert logic on the repository layer:
+- [x] Idempotent-insert logic on the repository layer:
       insert, catch unique-violation, return existing
       + unit tests covering the concurrent-replay case, including the
       different-body-same-key case from SPEC.md §4, **and** the
@@ -295,7 +295,57 @@ scope (per the working agreement in root `CLAUDE.md`).
       submitting the identical `Idempotency-Key` value must each get
       their own independently-created order, with no leakage of one
       partner's order to the other (this is the scenario the composite
-      `(partnerId, idempotencyKey)` unique constraint exists to prevent)
+      `(partnerId, idempotencyKey)` unique constraint exists to prevent).
+      `src/orders/orders.repository.ts`: `OrdersRepository.insertIdempotent`
+      does an insert-first `repository.insert()`, catching `QueryFailedError`
+      and checking the driver error's `code`/`constraint` (`23505` on
+      `idx_orders_idempotency_key` specifically, not any unique violation)
+      before falling back to `findOneByOrFail({ partnerId, idempotencyKey })`
+      — per `database-conventions`, no SELECT-then-INSERT, no app-level
+      locks. `CreateOrderInput` is `Pick<Order, ...>` rather than a
+      hand-duplicated shape, so it can't silently drift from the entity.
+      Registered `OrdersRepository` as an `OrdersModule` provider.
+      **Scope note:** `@code-reviewer` flagged that the *previous* task's
+      diff had silently also registered `TransitionGuard` (a leftover gap
+      from that task) in this same commit-in-progress — split out into
+      its own standalone commit (`5b170a1`) instead of folding it in here,
+      per the one-task-per-commit working agreement.
+      **Follow-up, not done now:** `@code-reviewer` also flagged that
+      `insertIdempotent` has no way to participate in an externally
+      supplied transaction/`EntityManager`, but SPEC.md §4 and
+      `logging-and-audit` require the creation audit row to be written in
+      the *same transaction* as the insert. This method's signature may
+      need to change (e.g. accept an `EntityManager`) when Phase 4's next
+      task (status-update transaction) or Phase 5's `POST /orders` wires
+      the audit write in — not addressed here since this task's scope is
+      the insert/catch/replay logic only, not the transaction it will
+      eventually run inside.
+      **Unit vs. integration boundary, intentional:** these are mocked
+      unit tests exercising the repository's branching logic only (violation
+      on the idempotency constraint → return existing; violation on any
+      other constraint, or a non-DB error → rethrow unchanged; no violation
+      → new row) — `test/unit/orders/orders.repository.spec.ts`, 6 cases:
+      new insert, same-partner replay, different-body-same-key replay
+      (asserts the returned row reflects the *existing* stored state, not
+      the replay's body), cross-tenant (two partners, same key, both
+      succeed independently, `findOneByOrFail` never called), an unrelated
+      unique-violation constraint (rethrown, not swallowed), and a
+      non-`QueryFailedError` (rethrown unchanged). This does not replace
+      real-DB verification of the constraint itself — `testing-standards`
+      explicitly warns that mocking repositories "hides database behavior
+      critical to correctness, especially... unique constraint enforcement
+      ... idempotency race handling" — that real-Postgres coverage is
+      Phase 7's already-planned integration tests (idempotency replay and
+      cross-tenant collision, both asserted via row count against the live
+      container), not a gap introduced here.
+      `npm run test -- --coverage` on the new file: 100% stmt/func/line;
+      branch sits at 90% due to a single uncovered branch on the
+      `@InjectRepository(Order)` constructor-parameter decorator's
+      compiled `__param`/`__decorate` helper (confirmed via a standalone
+      `tsc` repro of a bare decorated constructor param, unrelated to
+      `@nestjs/typeorm`) — a `tsc` decorator-emit artifact, not application
+      branch logic, and not something any additional test could reach.
+      Full suite green: 6/6 suites, 23/23 tests.
 - [ ] Status-update service method wraps the order update and audit insert
       in a single DB transaction (SPEC.md §2/§4); add a unit or integration
       test that forces a failure mid-update (e.g. a bad audit insert) and

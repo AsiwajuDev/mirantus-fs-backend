@@ -29,7 +29,7 @@ scope (per the working agreement in root `CLAUDE.md`).
 - [x] Install core deps: `@nestjs/typeorm`, `typeorm`, `pg`,
       `@nestjs/config`, `class-validator`, `class-transformer`, `helmet`,
       `@nestjs/throttler`, `@nestjs/swagger`
-- [ ] Remove default boilerplate: `src/app.controller.ts`,
+- [x] Remove default boilerplate: `src/app.controller.ts`, `test/app.e2e-spec.ts`
       `src/app.controller.spec.ts`, `src/app.service.ts`, and their
       registration in `app.module.ts` — none of it belongs in the final
       service

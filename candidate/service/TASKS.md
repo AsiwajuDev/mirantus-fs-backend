@@ -881,11 +881,125 @@ verified together.
 
 ## Phase 8 — CI & infra
 
-- [ ] `.github/workflows/ci.yml` — install, lint, build, test,
-      Postgres as a service container
-- [ ] Confirm CI passes on a clean checkout (not just locally)
-- [ ] Terraform module: container service + managed Postgres (plan-only)
-- [ ] `terraform validate` / `terraform plan` runs clean
+Three of four boxes landed in one pass; the fourth needs the user's own
+`git push` before it can be verified (pushing wasn't authorized in this
+session — asked, and the user chose to push it themselves) and is left
+unchecked rather than claimed without evidence.
+
+- [x] `.github/workflows/ci.yml` — install, lint, build, test, Postgres
+      as a service container. Single `build-and-test` job on
+      `ubuntu-latest`, `defaults.run.working-directory:
+      candidate/service` (per this project's own convention — `npm`
+      commands never run from the repo root). `postgres:16-alpine` as a
+      `services:` container with the same `pg_isready` healthcheck used
+      in `docker-compose.yml`, `DATABASE_URL`/`FRONTEND_ORIGIN`/
+      `DB_POOL_SIZE` set as job-level env (the app's own startup env
+      validation, `env.validation.ts`, would otherwise fail fast on a
+      missing `FRONTEND_ORIGIN` even just to construct the `AppModule`
+      for the e2e suite). Steps: checkout → `actions/setup-node@v4`
+      (Node 24, matching local dev and `@types/node`'s `^24`, with npm
+      caching keyed on `candidate/service/package-lock.json`) → `npm ci`
+      → `npm run lint` → `npm run build` → `npm run migration:run` →
+      `npm run test -- --coverage` → `npm run test:e2e`. Validated with
+      `actionlint` (installed via Homebrew for this — not previously on
+      this machine): clean, no findings.
+- [ ] Confirm CI passes on a clean checkout (not just locally). **Not
+      checked off — genuinely can't be, yet.** Verifying this requires
+      a real GitHub Actions run, which requires pushing to `origin/main`.
+      Asked the user first rather than pushing unilaterally (a
+      shared-state, visible action); they chose to push it themselves
+      rather than have this session push. Once pushed, this box should
+      be confirmed via `gh run list`/`gh api` against the actual run
+      (not just re-reading the YAML) before checking it off — flagging
+      this explicitly so it isn't silently forgotten or, worse, checked
+      off without ever having been observed to actually pass.
+- [x] Terraform module: container service + managed Postgres
+      (plan-only). `candidate/service/infra/terraform/` — AWS ECS
+      Fargate service + task (256 CPU/512MB, matching this exercise's
+      scale) running behind its own minimal, self-contained VPC (no
+      dependency on a pre-existing/default VPC — two public subnets
+      across two hardcoded AZs, since RDS's subnet group needs at least
+      two, and SPEC.md §8 explicitly puts multi-region/HA out of scope
+      for this exercise, so two AZs for the subnet-group minimum isn't
+      an attempt at real HA). RDS `postgres` 16, `db.t4g.micro`,
+      `multi_az = false`, matching the same out-of-scope note.
+      Security groups scope DB access to only the service's own
+      security group, not the whole VPC. `DATABASE_URL` is written to
+      an SSM `SecureString` parameter and injected into the task
+      definition via `secrets`, not a plaintext `environment` entry —
+      the same "don't let sensitive values leak" posture the
+      application itself applies via `AppLogger`'s redaction — with a
+      scoped `ssm:GetParameters` policy on the task execution role
+      (the AWS-managed `AmazonECSTaskExecutionRolePolicy` doesn't
+      include SSM access by default). Deliberately avoids any
+      `data "aws_..."` lookups (e.g. AZ discovery, default VPC lookup)
+      since those require live AWS API access during `plan`, which
+      would defeat "plan-only" — AZs are a plain variable with a
+      sensible default instead.
+- [x] `terraform validate` / `terraform plan` runs clean. Neither
+      `terraform` nor `actionlint` were installed on this machine —
+      installed both via Homebrew (`hashicorp/tap/terraform`, since the
+      plain `terraform` formula was pulled from homebrew-core over
+      HashiCorp's license change) to actually run these rather than
+      just eyeball the HCL. `terraform validate`: clean. `terraform
+      plan` initially failed even with fake credentials
+      (`AWS_ACCESS_KEY_ID=fake ...`) — the AWS provider calls STS
+      `GetCallerIdentity` during its own init, before Terraform reaches
+      resource planning, and that 403s with no real credentials. Added
+      `skip_credentials_validation`/`skip_requesting_account_id`/
+      `skip_metadata_api_check = true` to the provider block. With those
+      in place: `terraform plan` → clean, `19 to add, 0 to change, 0 to
+      destroy`, exit code 0, no errors or warnings in the full output
+      (not just the tail). `terraform fmt -check -recursive`: clean.
+      Added Terraform-specific entries to the root `.gitignore`
+      (`.terraform/`, `*.tfstate*`, override files) — `.terraform.lock.hcl`
+      is intentionally *not* ignored, since Terraform's own guidance is
+      to commit it so `init` reproduces the same provider version.
+      **`@code-reviewer` pass, findings applied:**
+      1. My first note here called the `skip_*` provider flags
+      "harmless to leave in for a real deployment too" — overstated.
+      `skip_credentials_validation` trades away an early fail-fast
+      check (a bad real credential now fails deeper into `apply`,
+      possibly after partially creating resources); `skip_metadata_api_check`
+      disables IMDS-based credential/region discovery, which would
+      break a real deployment run from an EC2/ECS-hosted CI runner
+      relying on an instance/task role rather than static keys.
+      Corrected the code comment in `versions.tf` to say so plainly
+      rather than leave the overstated claim standing.
+      2. `db_password` had a committed default
+      (`"changeme-in-real-deployment"`) on a variable marked `sensitive`
+      — `sensitive` only redacts CLI/log output, not the state file or
+      a committed default, so a forgotten override could have silently
+      applied RDS with a known password. Removed the default entirely;
+      `TF_VAR_db_password` (or a real secrets manager) is now required
+      for any plan/apply — re-verified `terraform plan` still succeeds
+      when supplied that way.
+      3. `.github/workflows/ci.yml` had no `permissions:` block (repo
+      default rather than least-privilege) — added `permissions:
+      contents: read`, since this workflow only reads code and runs
+      tests.
+      4. `npm run lint` (used in CI) runs `eslint --fix`, which
+      auto-corrects fixable violations and still exits 0 — a fixable
+      issue would silently get rewritten rather than fail the build.
+      Added a separate `lint:ci` script (same command, no `--fix`) and
+      pointed the workflow at it.
+      5. `variables.tf`'s `availability_zones` default isn't validated
+      against `aws_region` — changing the region without updating the
+      AZ list plans cleanly but fails at apply. Not fixed (would need a
+      `validation` block cross-referencing two variables, disproportionate
+      to a plan-only module), but called out explicitly in both the
+      variable's description and a comment, so it isn't a silent footgun.
+      Re-ran `terraform validate`/`plan`/`fmt -check` and `actionlint`
+      after all of the above: still clean.
+      **Also independently verified by `@code-reviewer`** (not just
+      re-read): simulated the CI job's exact conditions locally — a
+      throwaway `postgres:16-alpine` container with the workflow's own
+      healthcheck, `.env.local` moved aside, only the three job-level
+      env vars set — and ran every step in the same order
+      (`migration:run`, `lint`, `build`, `test --coverage`, `test:e2e`).
+      All passed. This is the closest verification achievable without
+      an actual push, and is noted here since it's stronger evidence
+      than the static `actionlint` check alone.
 
 ## Phase 9 — End-to-end harness verification
 

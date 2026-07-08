@@ -83,9 +83,14 @@ scope (per the working agreement in root `CLAUDE.md`).
       request, until Postgres is next needed (Phase 3 migrations) —
       Phase 0's matching `docker compose up -d` box stays unchecked
       until then too.
-- [ ] `.env.example` committed; real `.env` not committed;
+- [x] `.env.example` committed; real `.env` not committed;
       `FRONTEND_ORIGIN=http://localhost:5173` set so the harness's CORS
-      requirement is satisfied by default, not an afterthought
+      requirement is satisfied by default, not an afterthought.
+      Also set a working `DATABASE_URL` default matching
+      `docker-compose.yml`'s credentials (not explicitly asked for in
+      this bullet, but the natural extension of "set a working default,
+      not an afterthought" now that the compose file exists) — `.env`/
+      `.env.local` confirmed still gitignored, not committed.
 - [ ] `npm run start:dev` boots cleanly with no leftover default route
       responding on `/` — confirms the boilerplate removal actually took
 

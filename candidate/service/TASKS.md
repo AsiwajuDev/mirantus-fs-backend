@@ -1,513 +1,148 @@
 # TASKS.md
 
-Each task should be independently committable and, where possible, independently verifiable.
-
-Check items off as work is completed.
-
-If a task expands beyond what is listed here:
-
-1. Stop.
-2. Flag the scope expansion.
-3. Do not silently absorb additional work.
-
-Follow the working agreement defined in the root `CLAUDE.md`.
-
----
-
-# Phase 0 — Workflow Setup
-
-- [x] `.claude/` configured:
-  - `CLAUDE.md`
-  - skills
-  - subagents
-  - hooks
-  - MCP configuration
-
-See:
-
-```text
-AI_USAGE.md
-```
-
-for the reasoning behind these choices.
-
----
-
-# Phase 1 — Specification & Planning
-
-- [ ] Draft:
-
-```text
-SPEC.md
-```
-
-- [ ] Run:
-
-```text
-@spec-critic
-```
-
-against `SPEC.md`.
-
-Requirements:
-
-- Resolve every flagged gap.
-- Or explicitly defer the issue with justification.
-
-- [ ] Ensure this file (`TASKS.md`) reflects the resolved specification.
-
----
-
-# Phase 2 — Scaffold
-
-- [ ] Create NestJS application in:
-
-```text
-candidate/service/
-```
-
-using:
-
-```text
-nest new
-```
-
-- [ ] Install core dependencies:
-
-```text
-@nestjs/typeorm
-typeorm
-pg
-@nestjs/config
-class-validator
-class-transformer
-helmet
-@nestjs/throttler
-@nestjs/swagger
-```
-
-- [ ] Confirm `.gitignore` excludes:
-
-```text
-.env
-node_modules
-dist
-```
-
-- [ ] Add:
-
-```text
-docker-compose.yml
-```
-
-Requirements:
-
-- PostgreSQL service.
-- Correct port configuration.
-- Named database volume.
-
-- [ ] Commit:
-
-```text
-.env.example
-```
-
-- [ ] Confirm real `.env` files are not committed.
-
----
-
-# Phase 3 — Data Layer
-
-- [ ] Create entities:
-
-```text
-Order
-OrderStatusAudit
-```
-
-- [ ] Create initial migration.
-
-Requirements:
-
-Create:
-
-- Orders table.
-- Audit table.
-
-Add indexes:
-
-```text
-idx_orders_idempotency_key
-```
-
-Unique:
-
-```text
-idx_orders_partner_status
-```
-
-Composite:
-
-```text
-(partner_id, status)
-```
-
-- [ ] Configure:
-
-```text
-database/data-source.ts
-```
-
-using environment configuration.
-
-- [ ] Run:
-
-```text
-@db-reviewer
-```
-
-against the migrated local database.
-
-Confirm:
-
-- Tables exist.
-- Columns match expectations.
-- Required indexes exist.
-
----
-
-# Phase 4 — Core Domain Logic
-
-- [ ] Create:
-
-```text
-order-status.enum.ts
-```
-
-- [ ] Implement valid transition table as data.
-
-Follow:
-
-```text
-nestjs-architecture
-```
-
-requirements.
-
-- [ ] Implement:
-
-```text
-TransitionGuard
-```
-
-(or equivalent service method).
-
-Requirements:
-
-- Single source of truth.
-- No duplicated transition rules.
-
-Testing:
-
-- 100% coverage target.
-- Every valid transition covered.
-- At least one invalid transition per state covered.
-
-- [ ] Implement idempotent insert logic.
-
-Requirements:
-
-Pattern:
-
-```text
-INSERT
-→ catch unique violation
-→ return existing record
-```
-
-Do not use:
-
-```text
-SELECT
-→ INSERT
-```
-
-- [ ] Add unit tests covering concurrent replay behavior.
-
----
-
-# Phase 5 — Endpoints
-
-- [ ] Create DTOs:
-
-```text
-CreateOrderDto
-UpdateOrderStatusDto
-QueryOrdersDto
-```
-
-Requirements:
-
-- Fully validated.
-- Every field has validation decorators.
-- Every field has Swagger metadata using `@ApiProperty`.
-
-- [ ] Implement:
-
-```text
-POST /orders
-```
-
-- [ ] Implement:
-
-```text
-GET /orders
-```
-
-Requirements:
-
-- Filtering.
-- Pagination.
-- Bounded page size.
-
-- [ ] Implement:
-
-```text
-GET /orders/:id
-```
-
-- [ ] Implement:
-
-```text
-PATCH /orders/:id/status
-```
-
-- [ ] Add:
-
-Global exception filter.
-
-- [ ] Add custom exceptions:
-
-```text
-OrderNotFoundException
-InvalidTransitionException
-```
-
-- [ ] Run:
-
-```text
-@code-reviewer
-```
-
-before committing this phase.
-
----
-
-# Phase 6 — Cross-Cutting Concerns
-
-- [ ] Add:
-
-```text
-GET /health
-GET /ready
-```
-
-- [ ] Add structured logging.
-
-Requirements:
-
-- Structured log format.
-- Request correlation ID middleware.
-- Correlation ID propagated through logger context.
-
-- [ ] Configure:
-
-```text
-helmet()
-```
-
-- [ ] Configure CORS.
-
-Requirements:
-
-- Restricted to:
-
-```text
-FRONTEND_ORIGIN
-```
-
-- No wildcard origin.
-
-- [ ] Configure:
-
-```text
-@nestjs/throttler
-```
-
-Requirements:
-
-- Protect mutating endpoints.
-- Prefer global guard configuration.
-
-- [ ] Configure Swagger.
-
-Requirements:
-
-- Wire:
-
-```text
-@nestjs/swagger
-```
-
-in `main.ts`.
-
-- Confirm:
-
-```text
-/api-docs
-```
-
-renders correctly.
-
-- Confirm generated documentation reflects DTO validation rules.
-
-- [ ] Add startup environment validation.
-
-Requirements:
-
-- Fail fast on missing required variables.
-- Validate before serving traffic.
-
-- [ ] Run:
-
-```text
-@security-auditor
-```
-
-against the complete checklist.
-
----
-
-# Phase 7 — Tests
-
-- [ ] Run:
-
-```text
-@test-writer
-```
-
-for remaining unit test gaps.
-
-- [ ] Add integration test:
-
-```text
-POST → GET → PATCH
-```
-
-against the real PostgreSQL container.
-
-- [ ] Add integration test:
-
-Idempotency replay.
-
-Verify:
-
-- Same key returns same order.
-- Duplicate row is not created.
-- Database row count is asserted directly.
-
-- [ ] Add integration test:
-
-Audit creation.
-
-Verify:
-
-- Audit row exists.
-- Previous status recorded.
-- New status recorded.
-
----
-
-# Phase 8 — CI & Infrastructure
-
-- [ ] Add:
-
-```text
-.github/workflows/ci.yml
-```
-
-Pipeline requirements:
-
-- Install dependencies.
-- Lint.
-- Build.
-- Run tests.
-- Start PostgreSQL service container.
-
-- [ ] Confirm CI passes on a clean checkout.
-
-Do not rely only on local success.
-
-- [ ] Add Terraform module.
-
-Requirements:
-
-- Container service.
-- Managed PostgreSQL.
-
-Scope:
-
-```text
-plan-only
-```
-
-- [ ] Run:
-
-```bash
-terraform validate
-terraform plan
-```
-
-Confirm both complete successfully.
-
----
-
-# Phase 9 — Documentation & Close-Out
-
-- [ ] Update:
-
-```text
-README.md
-```
-
-A new developer must be able to:
-
-1. Start PostgreSQL.
-2. Run migrations.
-3. Start the API.
-4. Call endpoints.
-5. Run tests.
-
-using only the README instructions.
-
-- [ ] Complete:
-
-```text
-SPEC.md §8 self-review notes
-```
-
-- [ ] Create:
-
-```text
-AI_USAGE.md
-```
-
-- [ ] Final verification:
-
-Confirm every task is:
-
-- ✅ Completed
-
-or:
-
-- Explicitly deferred with justification.
+Each task is independently committable and (mostly) independently
+verifiable. Check items off as they land; if a task expands beyond what's
+listed here, stop and flag it rather than silently absorbing the extra
+scope (per the working agreement in root `CLAUDE.md`).
+
+## Phase 0 — Workflow setup
+
+- [x] `.claude/` configured — CLAUDE.md, skills, subagents, hooks, MCP
+      (see AI_USAGE.md for the reasoning behind each)
+- [ ] `chmod +x .claude/hooks/*.sh` — Claude Code runs this itself on
+      first session, once, with one approval prompt
+- [ ] `docker compose up -d` for Postgres — Claude Code runs this as
+      part of Phase 2 scaffolding, not a separate manual step
+
+## Phase 1 — Spec & planning
+
+- [x] Draft `SPEC.md`, including the `cancelled` state addition and its
+      explicit deviation-from-brief flag, the logging-vs-metrics
+      reasoning, and the harness compatibility note for `cancelled`
+- [ ] Run `@spec-critic` against `SPEC.md`; resolve or explicitly defer
+      every flagged gap
+- [ ] This file (`TASKS.md`) reflects the resolved spec
+
+## Phase 2 — Scaffold
+
+- [ ] `nest new` into `candidate/service/`
+- [ ] Install core deps:
+      `@nestjs/typeorm`, `typeorm`, `pg`,
+      `@nestjs/config`, `class-validator`, `class-transformer`,
+      `helmet`, `@nestjs/throttler`, `@nestjs/swagger`
+- [ ] Confirm `.gitignore` excludes `.env`, `node_modules`, `dist`
+- [ ] `docker-compose.yml` — Postgres service, correct port, named volume
+- [ ] `.env.example` committed; real `.env` not committed;
+      `FRONTEND_ORIGIN=http://localhost:5173` set so the harness's CORS
+      requirement is satisfied by default, not an afterthought
+
+## Phase 3 — Data layer
+
+- [ ] `Order` entity (six-value `status` enum, including `cancelled`) +
+      `OrderStatusAudit` entity
+- [ ] First migration: create both tables, both indexes:
+      `idx_orders_idempotency_key` unique,
+      `idx_orders_partner_status`
+- [ ] `database/data-source.ts` wired to env config
+- [ ] `@db-reviewer` run against the migrated local DB to confirm indexes
+      exist as expected
+
+## Phase 4 — Core domain logic
+
+- [ ] `order-status.enum.ts` + the valid-transitions table (as data, per
+      `nestjs-architecture` skill) — six states including `cancelled`,
+      matching SPEC.md §3 exactly
+- [ ] `TransitionGuard` + unit tests (100% coverage target) — every
+      valid transition including both `cancelled` paths (from `accepted`
+      and from `in_progress`), plus at least one invalid transition per
+      state
+- [ ] Idempotent-insert logic on the repository layer:
+      insert, catch unique-violation, return existing
+      + unit tests covering the concurrent-replay case, including the
+      different-body-same-key case from SPEC.md §4
+- [ ] Status-update service method wraps the order update and audit insert
+      in a single DB transaction (SPEC.md §2/§4); add a unit or integration
+      test that forces a failure mid-update (e.g. a bad audit insert) and
+      asserts the order's status change is rolled back too, not just
+      committed with a missing audit row
+
+## Phase 5 — Endpoints
+
+- [ ] `CreateOrderDto`, `UpdateOrderStatusDto`, `QueryOrdersDto`, fully
+      validated and annotated with `@ApiProperty`
+- [ ] `POST /orders`
+- [ ] `GET /orders` — response uses `data` as the array field per SPEC.md
+      §4, with `page`/`pageSize`/`total` metadata
+- [ ] `GET /orders/:id`
+- [ ] `PATCH /orders/:id/status`
+- [ ] Global exception filter, custom exception classes:
+      `OrderNotFoundException`, `InvalidTransitionException`,
+      409 body includes `from`/`to` fields per SPEC.md §4
+- [ ] `@code-reviewer` run on this diff before commit
+
+## Phase 6 — Cross-cutting
+
+- [ ] `GET /health`, `GET /ready`
+- [ ] Structured logging + request correlation id middleware
+      (the chosen instrumentation approach per SPEC.md §6)
+- [ ] `helmet()`, CORS restricted to `FRONTEND_ORIGIN`,
+      `@nestjs/throttler` on mutating endpoints
+- [ ] `@nestjs/swagger` wired up in `main.ts`; confirm `/api-docs` renders
+      correctly and reflects actual validation rules, including the
+      `cancelled` status value
+- [ ] Startup env validation (fail fast on missing required var)
+- [ ] `@security-auditor` run against the full checklist
+
+## Phase 7 — Tests
+
+- [ ] `@test-writer` invoked for unit test gaps
+- [ ] Integration test: full `POST → GET → PATCH` flow against real
+      Postgres container
+- [ ] Integration test: idempotency replay, asserted via row count,
+      not just HTTP response
+- [ ] Integration test: audit row written on every status change,
+      including both `cancelled` paths
+- [ ] Integration test:
+      `accepted → rejected` and `in_progress → rejected`
+      both correctly return `409`
+      (confirms the tightened `rejected` reachability from SPEC.md §3 is
+      enforced, not just documented)
+
+## Phase 8 — CI & infra
+
+- [ ] `.github/workflows/ci.yml` — install, lint, build, test,
+      Postgres as a service container
+- [ ] Confirm CI passes on a clean checkout (not just locally)
+- [ ] Terraform module: container service + managed Postgres (plan-only)
+- [ ] `terraform validate` / `terraform plan` runs clean
+
+## Phase 9 — End-to-end harness verification
+
+- [ ] `cd provided/frontend && cp .env.example .env && npm install && npm run dev`
+- [ ] With the service running on `:3000`, confirm the harness loads
+      without the "couldn't reach the service" banner
+- [ ] Create an order via the harness form; confirm it appears in the
+      table with all six required fields:
+      id, partnerId, patientReference, requestedLocation, priority,
+      status
+- [ ] Toggle "reuse last key" on, submit twice; confirm no duplicate row
+      appears, this is the idempotency check happening manually, not
+      just in the automated test
+- [ ] Attempt an invalid transition via the per-row control; confirm the
+      harness's error banner and debug panel show a readable 409 body
+- [ ] Attempt to trigger `accepted → cancelled` via the harness UI;
+      if unavailable (per SPEC.md §9), verify manually via `curl` or
+      `/api-docs` instead and note the workaround in SPEC.md §12
+- [ ] Test the `status`/`partnerId` filters and Prev/Next pagination
+      controls against the real list endpoint
+- [ ] Note anything the manual pass surfaced in SPEC.md §12
+
+## Phase 10 — Documentation & close-out
+
+- [ ] `README.md` — someone should be able to `docker compose up`,
+      migrate, hit the API, and run tests from these instructions alone
+- [ ] `SPEC.md` §12 self-review notes filled in
+- [ ] `AI_USAGE.md` written
+- [ ] Full pass:
+      does everything in this file have a ✅, or an explicit note on why
+      it was deferred?

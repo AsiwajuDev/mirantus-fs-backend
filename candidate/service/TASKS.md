@@ -29,10 +29,17 @@ scope (per the working agreement in root `CLAUDE.md`).
 - [x] Install core deps: `@nestjs/typeorm`, `typeorm`, `pg`,
       `@nestjs/config`, `class-validator`, `class-transformer`, `helmet`,
       `@nestjs/throttler`, `@nestjs/swagger`
-- [x] Remove default boilerplate: `src/app.controller.ts`, `test/app.e2e-spec.ts`
+- [x] Remove default boilerplate: `src/app.controller.ts`,
       `src/app.controller.spec.ts`, `src/app.service.ts`, and their
       registration in `app.module.ts` — none of it belongs in the final
-      service
+      service. **Scope note:** `test/app.e2e-spec.ts` was also deleted
+      even though not named here — it asserted `GET /` → `200 "Hello
+      World!"`, exactly the behavior this task removes, and the next
+      task below requires confirming no default route survives. Leaving
+      it would just be a guaranteed-failing test for dead code.
+      Unit tests are intentionally at zero (`npm run test` → "No tests
+      found") until the next task generates fresh `orders`/`health`
+      spec files.
 - [ ] Generate the `orders` module skeleton:
       `nest g module orders && nest g controller orders && nest g service orders`
       — per `nestjs-architecture` skill, everything for this feature

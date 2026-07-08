@@ -61,7 +61,10 @@ scope (per the working agreement in root `CLAUDE.md`).
       spec-relocation to `test/unit/health/` applied (no further jest
       config changes needed; `roots`/`rootDir` from the orders task
       already cover `test/unit/health/` too)
-- [ ] Confirm `.gitignore` excludes `.env`, `node_modules`, `dist`
+- [x] Confirm `.gitignore` excludes `.env`, `node_modules`, `dist` —
+      all three verified via `git check-ignore -v` against the root
+      `.gitignore` (no separate `candidate/service/.gitignore` exists
+      or is needed); no file changes required for this task
 - [ ] `docker-compose.yml` — Postgres service, correct port, named volume
 - [ ] `.env.example` committed; real `.env` not committed;
       `FRONTEND_ORIGIN=http://localhost:5173` set so the harness's CORS

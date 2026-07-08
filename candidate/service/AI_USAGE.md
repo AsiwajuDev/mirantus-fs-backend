@@ -81,27 +81,6 @@ Claude` trailer to commits by default. Decided to disable it via the
 deliberate, visible team policy rather than a personal preference hidden
 in a gitignored file.
 
-## Where the agent helped most
-
-*(To fill in once Phase 2 onward has actually run, e.g. scaffold speed,
-or a specific case where `@spec-critic`'s output changed something
-concrete in SPEC.md before any code existed. Name the specific moment,
-not a general impression.)*
-
-## Where the agent got something wrong, and how I caught it
-
-*(This is the section that matters most, and it can't be written in
-advance. Capture the real moment as it happens, the brief specifically
-points at the idempotency logic and the invalid-transition handling as
-likely places to look. Good questions to check once code exists: did the
-idempotency insert do a find-then-insert, which races under concurrent
-replay, instead of insert-then-catch-unique-violation? Did the
-transition guard correctly reject `in_progress → rejected` now that
-`rejected` is tightened to `received`-only? Did the audit row write
-land in the same DB transaction as the status update, or as an
-afterthought? Name which subagent, test, or manual read caught it, not
-just that it was caught.)*
-
 ## What I'd change for a longer-lived team version of this
 
 - `commitlint`/Husky is already the team-ready version of commit

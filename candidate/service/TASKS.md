@@ -245,9 +245,15 @@ scope (per the working agreement in root `CLAUDE.md`).
 
 ## Phase 4 — Core domain logic
 
-- [ ] `order-status.enum.ts` + the valid-transitions table (as data, per
+- [x] `order-status.enum.ts` + the valid-transitions table (as data, per
       `nestjs-architecture` skill) — six states including `cancelled`,
-      matching SPEC.md §3 exactly
+      matching SPEC.md §3 exactly. `VALID_TRANSITIONS` added to the
+      existing (Phase 3) `order-status.enum.ts` file rather than a new
+      one, per this task's own phrasing. Terminal states (`completed`,
+      `rejected`, `cancelled`) map to empty arrays; no state lists
+      itself, so self-transitions fall through to the catch-all `409`
+      per SPEC.md §3. Pure data — no `TransitionGuard` class or tests
+      yet, that's the next task.
 - [ ] `TransitionGuard` + unit tests (100% coverage target) — every
       valid transition including both `cancelled` paths (from `accepted`
       and from `in_progress`), plus at least one invalid transition per

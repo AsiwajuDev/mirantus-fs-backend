@@ -103,8 +103,34 @@ scope (per the working agreement in root `CLAUDE.md`).
 
 ## Phase 3 — Data layer
 
-- [ ] `Order` entity (six-value `status` enum, including `cancelled`) +
-      `OrderStatusAudit` entity
+- [x] `Order` entity (six-value `status` enum, including `cancelled`) +
+      `OrderStatusAudit` entity. `src/orders/order-status.enum.ts` and
+      `priority.enum.ts` export a `const [...] as const` array plus a
+      derived union `type` (not a TS `enum` keyword) per
+      `typescript-style`'s "type for unions" convention; the array is
+      the single source of truth also used by the entity's `enum:`
+      column option, and will be imported by Phase 4's transition table
+      and Phase 5's DTOs rather than redefined. **Deviation note:**
+      `typescript-style` says use `interface` for entities, but TypeORM
+      decorators (`@Entity`, `@Column`, etc.) only work on classes —
+      both entities are classes, a technical requirement, not a style
+      choice. `OrderStatusAudit.previousStatus`/`newStatus` are typed
+      `string`/`string | null` per `SPEC.md` §2, not the `OrderStatus`
+      union, so historical audit rows stay valid even if the status set
+      changes later. Not yet registered in `OrdersModule` via
+      `TypeOrmModule.forFeature()` — that needs `forRoot()` wired first,
+      which is the next task. No index added on `OrderStatusAudit.orderId`
+      beyond the two indexes SPEC.md/TASKS.md name for the `orders`
+      table — not asked for, not added speculatively; a code comment on
+      that column flags that its `REFERENCES orders(id)` FK constraint
+      must be added at the DB level in the migration, since there's no
+      `@ManyToOne` relation to generate it implicitly. Per
+      `@code-reviewer`: both enum columns now set an explicit `enumName`
+      (`orders_priority_enum`/`orders_status_enum`) so the migration's
+      `CREATE TYPE` has an intentional name rather than an implicit one
+      to reverse-engineer; `OrderStatusAudit`'s string columns use
+      `text` (matching `logging-and-audit`'s schema table) instead of
+      unbounded `varchar`.
 - [ ] First migration: create both tables, both indexes:
       `idx_orders_idempotency_key` unique on `(partner_id, idempotency_key)`
       — composite, not single-column, per SPEC.md §2 idempotency-key-scope

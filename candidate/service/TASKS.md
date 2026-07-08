@@ -11,8 +11,11 @@ scope (per the working agreement in root `CLAUDE.md`).
       (see AI_USAGE.md for the reasoning behind each)
 - [x] `chmod +x .claude/hooks/*.sh` — Claude Code runs this itself on
       first session, once, with one approval prompt
-- [ ] `docker compose up -d` for Postgres — Claude Code runs this as
-      part of Phase 2 scaffolding, not a separate manual step
+- [x] `docker compose up -d` for Postgres — landed in Phase 3 rather
+      than Phase 2 scaffolding, once the Docker daemon (OrbStack) was
+      actually running. `docker compose ps` shows `service-postgres-1`
+      healthy; `psql -U postgres -d orders -c "select 1;"` confirmed
+      connectivity matching `.env.local`'s `DATABASE_URL`.
 
 ## Phase 1 — Spec & planning
 
@@ -71,18 +74,14 @@ scope (per the working agreement in root `CLAUDE.md`).
       `orders_postgres_data`, matches `.env.local`'s `DATABASE_URL`
       (user/pass `postgres`, db `orders`), healthcheck
       `pg_isready -U postgres -d orders`. Validated on this machine via
-      `docker compose config` only (syntax/interpolation — no daemon
-      needed). **Not yet verified end-to-end on this machine:** the
-      Docker daemon (OrbStack) isn't running here, so the container
-      itself hasn't actually been started locally. `@code-reviewer` did
-      independently run `docker compose up -d` in its own separate
-      sandbox (which had Docker available) and confirmed the container
-      starts, reports healthy, and the exact `.env.local` credentials
-      connect successfully — real signal the file is correct, but not a
-      substitute for verifying on this machine. Deferred, at the user's
-      request, until Postgres is next needed (Phase 3 migrations) —
-      Phase 0's matching `docker compose up -d` box stays unchecked
-      until then too.
+      `docker compose config` only, since the Docker daemon wasn't
+      running on this machine at the time. **Now verified end-to-end
+      on this machine too:** once OrbStack was started (Phase 3), ran
+      `docker compose up -d` — `service-postgres-1` reports healthy and
+      `psql -U postgres -d orders -c "select 1;"` connects successfully
+      with the exact `.env.local` credentials. `@code-reviewer` had
+      already independently confirmed the same in its own sandbox
+      earlier; this closes the loop on this machine specifically.
 - [x] `.env.example` committed; real `.env` not committed;
       `FRONTEND_ORIGIN=http://localhost:5173` set so the harness's CORS
       requirement is satisfied by default, not an afterthought.

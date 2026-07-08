@@ -168,7 +168,56 @@ scope (per the working agreement in root `CLAUDE.md`).
       emerges (SPEC.md §8 calls it out for "internal state
       reconstruction and investigation"). Add one in a later migration
       if/when that need shows up, rather than now.
-- [ ] `database/data-source.ts` wired to env config
+- [x] `database/data-source.ts` wired to env config. Standalone CLI
+      config (runs outside the Nest DI container, so it can't use
+      `@nestjs/config`) reads `DATABASE_URL` (fails fast if missing — a
+      real `exactOptionalPropertyTypes` compile error forced this
+      rather than a type-cast) and `DB_POOL_SIZE` (defaults to `10`).
+      Added `migration:run`/`migration:revert`/`migration:generate` npm
+      scripts (`typeorm-ts-node-commonjs`). Both entities/audit table
+      now import a shared `ORDER_ENTITIES` constant
+      (`src/orders/entities/index.ts`) instead of each file listing
+      `[Order, OrderStatusAudit]` separately, so a future new entity
+      can't be added to one and forgotten in the other.
+      **Correction, found by `@code-reviewer`:** my first verification
+      pass ran `npm run migration:run`/`migration:revert` with
+      `DATABASE_URL` manually exported inline in the shell command —
+      that masked a real bug, since `data-source.ts` originally used
+      bare `import 'dotenv/config'`, which only auto-loads a file
+      literally named `.env`, and this project has no such file (only
+      `.env.local`). The claim that this was "verified for real" was
+      not reproducible from a clean shell using only the documented
+      `.env.local` file, which is exactly what "wired to env config" is
+      supposed to deliver. Fixed by loading `.env.local` explicitly
+      (falling back to `.env` if absent), matching the same precedence
+      already used in `AppModule`. **Re-verified without any manually
+      exported env var** — `npm run migration:revert` then
+      `migration:run` both worked purely off `.env.local`, confirmed
+      with `env | grep DATABASE_URL` showing nothing beforehand.
+      **Scope note (pre-cleared with the user before proceeding):** also
+      wired `TypeOrmModule.forRootAsync()` into `AppModule` (via
+      `ConfigModule`/`ConfigService`, `getOrThrow('DATABASE_URL')`,
+      `inject: [ConfigService]` only — no `imports: [ConfigModule]`,
+      since `ConfigModule.forRoot({ isGlobal: true })` already makes it
+      available process-wide, and adding it again was redundant) and
+      `TypeOrmModule.forFeature(ORDER_ENTITIES)` into `OrdersModule` —
+      not its own TASKS.md line item, but Phase 4's repository-layer
+      work needs a live runtime connection to exist, and it shares the
+      same config as the CLI data source. Also hit and fixed the same
+      `.env.local`-vs-`.env` bug on the `AppModule` side first (that's
+      actually how the `data-source.ts` version of the bug was noticed
+      afterward) — `envFilePath: ['.env.local', '.env']`. Added
+      `DB_POOL_SIZE=10` to `.env.example` now that it's actually read.
+      **Verified by actually starting the app** (`npm run start:dev`)
+      against the live container, re-confirmed after the entities/env
+      refactor: `TypeOrmCoreModule dependencies initialized` with no
+      error, `Nest application successfully started`, `GET /orders`
+      responds `404` (not connection-refused — confirms the server is
+      genuinely up, `OrdersController` just has no handlers yet). Full
+      env-validation fail-fast (Joi/class-validator, covering every
+      required var) stays Phase 6's job, not this one's — only
+      `DATABASE_URL` got a guard here, as a direct, unavoidable
+      consequence of using it at all.
 - [ ] `@db-reviewer` run against the migrated local DB to confirm indexes
       exist as expected
 
